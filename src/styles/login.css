@@ -1,0 +1,187 @@
+:root {
+  --color-bg: #eef3ff;
+  --color-primary: #5b6cf7;
+  --color-text: #0f172a;
+  --color-text-muted: #64748b;
+  --color-text-light: #94a3b8;
+}
+
+.login-page {
+  min-height: 100vh;
+  background: var(--color-bg);
+  padding: 64px 16px;
+}
+
+@media (max-width: 900px) {
+  .login-page {
+    padding: 40px 12px;
+  }
+}
+
+.page-card {
+  border-radius: 24px;
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow: 0 40px 120px rgba(15, 23, 42, 0.12);
+}
+
+.login-page__container {
+  min-height: 100vh;
+  max-width: 1160px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 900px) {
+  .login-page__container {
+    grid-template-columns: 1.05fr 0.95fr;
+  }
+}
+
+.hero-panel {
+  background: #071026;
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 56px;
+}
+
+@media (max-width: 900px) {
+  .hero-panel {
+    padding: 40px;
+  }
+}
+
+.hero-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+.hero-panel__badge,
+.hero-panel__badge-alt {
+  width: 76px;
+  height: 76px;
+  border-radius: 14px;
+}
+
+.hero-panel__badge {
+  background: rgba(99, 102, 241, 0.18);
+}
+
+.hero-panel__badge-alt {
+  background: rgba(16, 185, 129, 0.18);
+}
+
+.hero-panel__title {
+  font-size: 34px;
+  font-weight: 800;
+  margin-bottom: 16px;
+}
+
+.hero-panel__subtitle,
+.panel-text-muted {
+  color: var(--color-text-light);
+  margin-bottom: 24px;
+}
+
+.panel-card {
+  background: rgba(15, 23, 42, 0.16);
+  border-radius: 24px;
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+}
+
+.panel-card__label {
+  color: var(--color-text-light);
+  margin-bottom: 8px;
+  display: block;
+}
+
+.panel-card__value {
+  font-weight: 600;
+}
+
+.page-form {
+  padding: 56px;
+  background: #ffffff;
+}
+
+@media (max-width: 900px) {
+  .page-form {
+    padding: 40px;
+  }
+}
+
+.page-form__inner {
+  max-width: 450px;
+  margin: 0 auto;
+}
+
+.page-form__title {
+  font-size: 20px;
+  font-weight: 800;
+  margin-bottom: 8px;
+  color: var(--color-text);
+}
+
+.page-form__subtitle {
+  font-size: 14px;
+  color: var(--color-text-muted);
+  margin-bottom: 32px;
+}
+
+.text-input {
+  width: 100%;
+}
+
+.text-input .MuiOutlinedInput-root {
+  border-radius: 14px;
+}
+
+.text-input .MuiInputBase-input {
+  color: #000;
+}
+
+.text-input .MuiInputLabel-root {
+  color: var(--color-text-muted);
+}
+
+.button-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.primary-button {
+  background: var(--color-primary);
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-radius: 14px;
+  padding: 18px 0;
+}
+
+.text-button {
+  text-transform: none;
+  color: var(--color-primary);
+}
+
+.section-divider {
+  margin: 32px 0;
+}
+
+.link-paragraph {
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.link-paragraph .text-button {
+  padding: 0;
+}

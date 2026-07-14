@@ -1,10 +1,11 @@
-import { Alert, Box, Button, Card, CardContent, Checkbox, Divider, FormControlLabel, Stack, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, Checkbox, Divider, FormControlLabel, Stack, TextField, Typography } from '@mui/material';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { useState } from 'react';
+import '../styles/login.css';
 
 const loginSchema = z.object({
   email: z.string().email('Enter a valid email'),
@@ -34,73 +35,50 @@ export default function LoginPage() {
   };
 
   return (
-    <Box sx={{ minHeight: '100vh', background: 'var(--color-bg)', py: 10, px: 2 }}>
-      <Box sx={{ minHeight: '100vh', maxWidth: 1160, mx: 'auto', display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.05fr 0.95fr' }, boxShadow: '0 40px 120px rgba(15, 23, 42, 0.12)', borderRadius: 4, overflow: 'hidden', bgcolor: '#fff' }}>
-        <Box sx={{ background: '#071026', color: '#fff', p: { xs: 5, md: 7 }, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+    <Box className="login-page">
+      <Box className="page-card login-page__container">
+        <Box className="hero-panel">
           <Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 4 }}>
-              <Box sx={{ width: 42, height: 42, borderRadius: 2, bgcolor: '#5b6cf7' }} />
+            <Box className="hero-panel__header">
+              <Box className="hero-panel__badge" />
               <Box>
-                <Typography variant="h6" fontWeight={700} letterSpacing="0.04em" sx={{ color: '#fff', fontSize: '16px' }}>
-                  RetailPulse
-                </Typography>
-                <Typography variant="body2" color="#94a3b8">
-                  Analytics
-                </Typography>
+                <Typography className="hero-panel__brand">RetailPulse</Typography>
+                <Typography className="panel-text-muted">Analytics</Typography>
               </Box>
             </Box>
-            <Typography variant="h4" fontWeight={800} sx={{ mb: 2, color: '#fff', fontSize: '34px' }}>
-              Welcome Back
-            </Typography>
-            <Typography color="#cbd5e1" sx={{ maxWidth: 380, mb: 5 }}>
+
+            <Typography className="hero-panel__title">Welcome Back</Typography>
+            <Typography className="hero-panel__subtitle">
               Make smarter retail decisions with real-time analytics and retail performance insights.
             </Typography>
-            <Box sx={{ display: 'grid', gap: 3 }}>
-              <Box sx={{ display: 'grid', gap: 1 }}>
-                <Box sx={{ width: 76, height: 76, borderRadius: 3, bgcolor: 'rgba(99, 102, 241, 0.18)' }} />
-                <Box sx={{ width: 104, height: 12, bgcolor: 'rgba(255,255,255,0.12)', borderRadius: 999 }} />
-                <Box sx={{ width: 84, height: 12, bgcolor: 'rgba(255,255,255,0.12)', borderRadius: 999 }} />
-              </Box>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Box sx={{ width: 76, height: 76, borderRadius: 3, bgcolor: 'rgba(16, 185, 129, 0.18)' }} />
-                <Box sx={{ width: 76, height: 76, borderRadius: 3, bgcolor: 'rgba(59, 130, 246, 0.18)' }} />
-              </Box>
+
+            <Box className="panel-card">
+              <Box className="hero-panel__badge" />
+              <Box className="hero-panel__badge-alt" />
             </Box>
           </Box>
-          <Box>
-            <Typography variant="body2" color="#94a3b8" sx={{ mb: 1 }}>
-             
-            </Typography>
-            <Typography fontWeight={600}></Typography>
-            <Typography fontWeight={600}></Typography>
-          </Box>
+
+          
         </Box>
 
-        <Box sx={{ p: { xs: 5, md: 7 }, bgcolor: '#fff' }}>
-          <Box sx={{ maxWidth: 450, mx: 'auto' }}>
-            <Typography variant="h5" fontWeight={800} sx={{ mb: 1, color: 'var(--color-text)', fontSize: '20px' }}>
-              Welcome Back
-            </Typography>
-            <Typography color="#64748b" sx={{ mb: 4, fontSize: '14px' }}>
-              Sign in to your account
-            </Typography>
+        <Box className="page-form">
+          <Box className="page-form__inner">
+            <Typography className="page-form__title">Welcome Back</Typography>
+            <Typography className="page-form__subtitle">Sign in to your account</Typography>
 
             <form onSubmit={handleSubmit(onSubmit)}>
               <Stack spacing={3}>
                 <TextField
+                  className="text-input"
                   label="Email"
                   fullWidth
                   {...register('email')}
                   error={Boolean(errors.email)}
                   helperText={errors.email?.message ?? ''}
                   variant="outlined"
-                  sx={{
-                    '& .MuiOutlinedInput-root': { borderRadius: 3 },
-                    '& .MuiInputBase-input': { color: '#000' },
-                    '& .MuiInputLabel-root': { color: '#64748b' }
-                  }}
                 />
                 <TextField
+                  className="text-input"
                   label="Password"
                   type="password"
                   fullWidth
@@ -108,18 +86,13 @@ export default function LoginPage() {
                   error={Boolean(errors.password)}
                   helperText={errors.password?.message ?? ''}
                   variant="outlined"
-                  sx={{
-                    '& .MuiOutlinedInput-root': { borderRadius: 3 },
-                    '& .MuiInputBase-input': { color: '#000' },
-                    '& .MuiInputLabel-root': { color: '#64748b' }
-                  }}
                 />
-                <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" spacing={1}>
+                <Stack className="button-row">
                   <FormControlLabel
                     control={<Checkbox checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} color="primary" />}
                     label="Remember me"
                   />
-                  <Button component={Link} to="/forgot" variant="text" size="small" sx={{ textTransform: 'none', color: '#5b6cf7' }}>
+                  <Button component={Link} to="/forgot" variant="text" size="small" className="text-button">
                     Forgot Password?
                   </Button>
                 </Stack>
@@ -130,17 +103,17 @@ export default function LoginPage() {
                   size="large"
                   type="submit"
                   disabled={isSubmitting}
-                  sx={{ bgcolor: '#5b6cf7', py: 1.8, textTransform: 'uppercase', letterSpacing: '0.08em', borderRadius: 3 }}
+                  className="primary-button"
                 >
                   Sign In
                 </Button>
               </Stack>
             </form>
 
-            <Divider sx={{ my: 4 }} />
-            <Typography color="#64748b" variant="body2" align="center">
+            <Divider className="section-divider" />
+            <Typography className="link-paragraph" variant="body2" align="center">
               Don’t have an account?{' '}
-              <Button component={Link} to="/register" variant="text" sx={{ p: 0, textTransform: 'none', color: '#5b6cf7' }}>
+              <Button component={Link} to="/register" variant="text" className="text-button">
                 Register
               </Button>
             </Typography>

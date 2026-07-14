@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { useState } from 'react';
+import '../styles/register.css';
 
 const registerSchema = z.object({
   companyName: z.string().min(2, 'Company name is required'),
@@ -43,90 +44,80 @@ export default function RegisterPage() {
   };
 
   return (
-    <Box sx={{ minHeight: '100vh', background: 'var(--color-bg)', py: 6, px: 2 }}>
-      <Box sx={{ maxWidth: 1100, mx: 'auto', display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.05fr 0.95fr' }, boxShadow: '0 30px 90px rgba(15, 23, 42, 0.12)', borderRadius: 4, overflow: 'hidden', bgcolor: '#fff' }}>
-        <Box sx={{ background: '#101e3a', color: '#fff', p: { xs: 4, md: 6 }, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+    <Box className="register-page">
+      <Box className="page-card register-page__container">
+        <Box className="register-panel">
           <Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 4 }}>
-              <Box sx={{ width: 48, height: 48, borderRadius: 3, bgcolor: '#6366f1' }} />
+            <Box className="register-panel__header">
+              <Box className="hero-panel__badge" />
               <Box>
-                <Typography variant="h6" fontWeight={700} sx={{ letterSpacing: '0.03em' }}>
-                  RetailPulse
-                </Typography>
-                <Typography variant="body2" color="grey.300">
-                  Analytics
-                </Typography>
+                <Typography className="register-panel__brand">RetailPulse</Typography>
+                <Typography className="register-panel__subheading">Analytics</Typography>
               </Box>
             </Box>
-            <Typography variant="h4" fontWeight={800} sx={{ mb: 2, color: '#fff', fontSize: '28px' }}>
-              Start your retail analytics journey
-            </Typography>
-            <Typography color="#cbd5e1" sx={{ maxWidth: 420, mb: 4 }}>
+            <Typography className="register-panel__title">Start your retail analytics journey</Typography>
+            <Typography className="register-panel__text">
               Set up a company workspace for intuitive reporting, product management, and team performance tracking.
             </Typography>
-            <Stack spacing={2}>
-              <Typography variant="body2" color="grey.400">• Create secure admin access</Typography>
-              <Typography variant="body2" color="grey.400">• Track store and sales health</Typography>
-              <Typography variant="body2" color="grey.400">• Build reports your team can trust</Typography>
+            <Stack className="register-panel__list" spacing={2}>
+              <Typography variant="body2">• Create secure admin access</Typography>
+              <Typography variant="body2">• Track store and sales health</Typography>
+              <Typography variant="body2">• Build reports your team can trust</Typography>
             </Stack>
           </Box>
-          <Box sx={{ mt: { xs: 4, md: 0 } }}>
-            <Typography variant="body2" color="grey.400" sx={{ mb: 1 }}>
-              Ready to get started?
-            </Typography>
+          <Box className="register-panel__footer">
+            <Typography variant="body2">Ready to get started?</Typography>
             <Typography fontWeight={600}>Create a RetailPulse account and launch your analytics.</Typography>
           </Box>
         </Box>
 
-        <Card elevation={0} sx={{ borderRadius: 0, p: { xs: 4, md: 6 }, bgcolor: '#fff' }}>
+        <Card elevation={0} className="register-form-card">
           <CardContent>
             <Stack spacing={3}>
               <Box>
-                <Typography variant="h5" fontWeight={800} sx={{ mb: 1, color: 'var(--color-text)', fontSize: '20px' }}>
-                  Company registration
-                </Typography>
-                <Typography color="#64748b">Register your company and create the first administrator account.</Typography>
+                <Typography className="register-form__title">Company registration</Typography>
+                <Typography className="register-form__subtitle">Register your company and create the first administrator account.</Typography>
               </Box>
 
               <form onSubmit={handleSubmit(onSubmit)}>
-                <Grid container spacing={2}>
+                <Grid container spacing={2} className="register-form-grid">
                   <Grid item xs={12} md={6}>
-                    <TextField label="Company Name" fullWidth {...formRegister('companyName')} error={Boolean(errors.companyName)} helperText={errors.companyName?.message ?? ''} sx={{ '& .MuiInputBase-input': { color: '#000' }, '& .MuiInputLabel-root': { color: '#64748b' } }} />
+                    <TextField className="text-input" label="Company Name" fullWidth {...formRegister('companyName')} error={Boolean(errors.companyName)} helperText={errors.companyName?.message ?? ''} />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField label="Industry" fullWidth {...formRegister('industry')} error={Boolean(errors.industry)} helperText={errors.industry?.message ?? ''} sx={{ '& .MuiInputBase-input': { color: '#000' }, '& .MuiInputLabel-root': { color: '#64748b' } }} />
+                    <TextField className="text-input" label="Industry" fullWidth {...formRegister('industry')} error={Boolean(errors.industry)} helperText={errors.industry?.message ?? ''} />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField label="Company Email" fullWidth {...formRegister('companyEmail')} error={Boolean(errors.companyEmail)} helperText={errors.companyEmail?.message ?? ''} sx={{ '& .MuiInputBase-input': { color: '#000' }, '& .MuiInputLabel-root': { color: '#64748b' } }} />
+                    <TextField className="text-input" label="Company Email" fullWidth {...formRegister('companyEmail')} error={Boolean(errors.companyEmail)} helperText={errors.companyEmail?.message ?? ''} />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField label="Company Phone" fullWidth {...formRegister('companyPhone')} error={Boolean(errors.companyPhone)} helperText={errors.companyPhone?.message ?? ''} sx={{ '& .MuiInputBase-input': { color: '#000' }, '& .MuiInputLabel-root': { color: '#64748b' } }} />
+                    <TextField className="text-input" label="Company Phone" fullWidth {...formRegister('companyPhone')} error={Boolean(errors.companyPhone)} helperText={errors.companyPhone?.message ?? ''} />
                   </Grid>
                   <Grid item xs={12}>
-                    <TextField label="Company Address" fullWidth {...formRegister('companyAddress')} error={Boolean(errors.companyAddress)} helperText={errors.companyAddress?.message ?? ''} sx={{ '& .MuiInputBase-input': { color: '#000' }, '& .MuiInputLabel-root': { color: '#64748b' } }} />
+                    <TextField className="text-input" label="Company Address" fullWidth {...formRegister('companyAddress')} error={Boolean(errors.companyAddress)} helperText={errors.companyAddress?.message ?? ''} />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField label="Owner Name" fullWidth {...formRegister('ownerName')} error={Boolean(errors.ownerName)} helperText={errors.ownerName?.message ?? ''} sx={{ '& .MuiInputBase-input': { color: '#000' }, '& .MuiInputLabel-root': { color: '#64748b' } }} />
+                    <TextField className="text-input" label="Owner Name" fullWidth {...formRegister('ownerName')} error={Boolean(errors.ownerName)} helperText={errors.ownerName?.message ?? ''} />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField label="Owner Email" fullWidth {...formRegister('ownerEmail')} error={Boolean(errors.ownerEmail)} helperText={errors.ownerEmail?.message ?? ''} sx={{ '& .MuiInputBase-input': { color: '#000' }, '& .MuiInputLabel-root': { color: '#64748b' } }} />
+                    <TextField className="text-input" label="Owner Email" fullWidth {...formRegister('ownerEmail')} error={Boolean(errors.ownerEmail)} helperText={errors.ownerEmail?.message ?? ''} />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField label="Password" type="password" fullWidth {...formRegister('password')} error={Boolean(errors.password)} helperText={errors.password?.message ?? ''} sx={{ '& .MuiInputBase-input': { color: '#000' }, '& .MuiInputLabel-root': { color: '#64748b' } }} />
+                    <TextField className="text-input" label="Password" type="password" fullWidth {...formRegister('password')} error={Boolean(errors.password)} helperText={errors.password?.message ?? ''} />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField label="Confirm Password" type="password" fullWidth {...formRegister('confirmPassword')} error={Boolean(errors.confirmPassword)} helperText={errors.confirmPassword?.message ?? ''} sx={{ '& .MuiInputBase-input': { color: '#000' }, '& .MuiInputLabel-root': { color: '#64748b' } }} />
+                    <TextField className="text-input" label="Confirm Password" type="password" fullWidth {...formRegister('confirmPassword')} error={Boolean(errors.confirmPassword)} helperText={errors.confirmPassword?.message ?? ''} />
                   </Grid>
                 </Grid>
-                {submitError ? <Alert severity="error" sx={{ mt: 2 }}>{submitError}</Alert> : null}
-                <Button variant="contained" size="large" type="submit" disabled={isSubmitting} sx={{ mt: 3, width: '100%' }}>
+                {submitError ? <Alert severity="error">{submitError}</Alert> : null}
+                <Button variant="contained" size="large" type="submit" disabled={isSubmitting} className="form-submit-button primary-button">
                   Create company
                 </Button>
               </form>
-              <Divider sx={{ my: 0 }} />
-              <Typography color="text.secondary" variant="body2" align="center">
+              <Divider className="section-divider" />
+              <Typography className="register-form-note" variant="body2">
                 Already have an account?{' '}
-                <Button component={Link} to="/login" variant="text" sx={{ p: 0, textTransform: 'none' }}>
+                <Button component={Link} to="/login" variant="text" className="text-button">
                   Sign in
                 </Button>
               </Typography>
