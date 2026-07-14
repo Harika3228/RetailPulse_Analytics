@@ -1,0 +1,41 @@
+:root {
+  --color-bg: #eef3ff;
+  --color-primary: #5b6cf7;
+  --color-text: #0f172a;
+  --color-text-muted: #64748b;
+  --color-text-inverse: #ffffff;
+}
+
+html, body, #root {
+  min-height: 100vh;
+  margin: 0;
+  background: radial-gradient(circle at top left, rgba(99, 102, 241, 0.14), transparent 28%),
+    radial-gradient(circle at 85% 15%, rgba(59, 130, 246, 0.09), transparent 22%),
+    var(--color-bg);
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: Inter, Roboto, sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+  color: var(--color-text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Utility classes for explicit colors used by the pages */
+.text-muted { color: var(--color-text-muted) !important; }
+.text-inverse { color: var(--color-text-inverse) !important; }
+.primary-bg { background-color: var(--color-primary) !important; }
+
+/* Force MUI inputs and table cells to use dark text for readability */
+.MuiInputBase-input { color: #000 !important; }
+.MuiInputLabel-root { color: #64748b !important; }
+.MuiFormHelperText-root { color: #6b7280 !important; }
+.MuiTableCell-root { color: var(--color-text) !important; }
+.MuiTableRow-root { color: var(--color-text) !important; }
