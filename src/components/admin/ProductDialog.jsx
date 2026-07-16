@@ -19,6 +19,7 @@ export default function ProductDialog({
   categories,
   form,
   errorMessage,
+  submitDisabled,
   onChange,
   onClose,
   onSubmit,
@@ -99,7 +100,7 @@ export default function ProductDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" onClick={onSubmit}>
+        <Button variant="contained" onClick={onSubmit} disabled={submitDisabled}>
           {editingProductId ? 'Update' : 'Save'}
         </Button>
       </DialogActions>

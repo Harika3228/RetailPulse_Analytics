@@ -41,6 +41,7 @@ def main() -> None:
     selected_port = pick_port(args.host, args.port)
     if selected_port != args.port:
         print(f"[run_dev] Port {args.port} is in use. Falling back to {selected_port}.")
+    print(f"[run_dev] Starting backend at http://{args.host}:{selected_port}")
 
     uvicorn.run(
         "app.main:app",

@@ -183,6 +183,15 @@ export default function ProductsPage() {
     return null;
   };
 
+  const isProductFormIncomplete =
+    !productForm.name.trim() ||
+    !productForm.sku.trim() ||
+    !String(productForm.categoryId).trim() ||
+    String(productForm.unitPrice).trim() === '' ||
+    String(productForm.costPrice).trim() === '' ||
+    String(productForm.stockQuantity).trim() === '' ||
+    !productForm.unitOfMeasure.trim();
+
   const submitProduct = async () => {
     if (!token) {
       return;
@@ -401,6 +410,7 @@ export default function ProductsPage() {
         categories={categories}
         form={productForm}
         errorMessage={productFormError}
+        submitDisabled={isProductFormIncomplete}
         onChange={setProductForm}
         onClose={() => setProductDialogOpen(false)}
         onSubmit={submitProduct}
