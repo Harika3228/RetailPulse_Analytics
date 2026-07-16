@@ -1,4 +1,5 @@
 import unittest
+import uuid
 
 from fastapi.testclient import TestClient
 
@@ -16,16 +17,17 @@ class AuditLoggingTests(unittest.TestCase):
         self.db.close()
 
     def test_registration_login_logout_and_password_change_create_audit_entries(self):
+        suffix = uuid.uuid4().hex[:8]
         register_response = self.client.post(
             "/auth/register",
             json={
-                "companyName": "Audit Co Unique",
+                "companyName": f"Audit Co Unique {suffix}",
                 "industry": "Retail",
-                "companyEmail": "audit-unique@example.com",
+                "companyEmail": f"audit-unique-{suffix}@example.com",
                 "companyAddress": "1 Audit Street",
                 "companyPhone": "555-0000",
                 "ownerName": "Audit Owner",
-                "ownerEmail": "owner-unique@example.com",
+                "ownerEmail": f"owner-unique-{suffix}@example.com",
                 "password": "password123",
                 "confirmPassword": "password123",
             },
@@ -34,7 +36,7 @@ class AuditLoggingTests(unittest.TestCase):
 
         login_response = self.client.post(
             "/auth/login",
-            json={"email": "owner-unique@example.com", "password": "password123"},
+            json={"email": f"owner-unique-{suffix}@example.com", "password": "password123"},
         )
         self.assertEqual(login_response.status_code, 200)
         token = login_response.json()["access_token"]

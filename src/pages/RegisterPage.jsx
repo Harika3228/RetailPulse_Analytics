@@ -3,36 +3,40 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../auth/AuthContext';
+import { useAuth } from '../auth/AuthContext.jsx';
 import { useState } from 'react';
 import '../styles/register.css';
 
-const registerSchema = z.object({
-  companyName: z.string().min(2, 'Company name is required'),
-  industry: z.string().min(2, 'Industry is required'),
-  companyEmail: z.string().email('Enter a valid company email'),
-  companyAddress: z.string().min(5, 'Address is required'),
-  companyPhone: z.string().min(7, 'Phone number is required'),
-  ownerName: z.string().min(2, 'Owner name is required'),
-  ownerEmail: z.string().email('Enter a valid owner email'),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
-  confirmPassword: z.string().min(8, 'Confirm your password')
-}).refine((data) => data.password === data.confirmPassword, {
-  message: 'Passwords do not match',
-  path: ['confirmPassword']
-});
-
-type RegisterForm = z.infer<typeof registerSchema>;
+const registerSchema = z
+  .object({
+    companyName: z.string().min(2, 'Company name is required'),
+    industry: z.string().min(2, 'Industry is required'),
+    companyEmail: z.string().email('Enter a valid company email'),
+    companyAddress: z.string().min(5, 'Address is required'),
+    companyPhone: z.string().min(7, 'Phone number is required'),
+    ownerName: z.string().min(2, 'Owner name is required'),
+    ownerEmail: z.string().email('Enter a valid owner email'),
+    password: z.string().min(8, 'Password must be at least 8 characters'),
+    confirmPassword: z.string().min(8, 'Confirm your password'),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: 'Passwords do not match',
+    path: ['confirmPassword'],
+  });
 
 export default function RegisterPage() {
   const navigate = useNavigate();
   const { register } = useAuth();
   const [submitError, setSubmitError] = useState('');
-  const { register: formRegister, handleSubmit, formState: { errors, isSubmitting } } = useForm<RegisterForm>({
-    resolver: zodResolver(registerSchema)
+  const {
+    register: formRegister,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm({
+    resolver: zodResolver(registerSchema),
   });
 
-  const onSubmit = async (data: RegisterForm) => {
+  const onSubmit = async (data) => {
     setSubmitError('');
     try {
       await register({ ...data });
@@ -76,7 +80,9 @@ export default function RegisterPage() {
             <Stack spacing={3}>
               <Box>
                 <Typography className="register-form__title">Company registration</Typography>
-                <Typography className="register-form__subtitle">Register your company and create the first administrator account.</Typography>
+                <Typography className="register-form__subtitle">
+                  Register your company and create the first administrator account.
+                </Typography>
               </Box>
 
               <form onSubmit={handleSubmit(onSubmit)}>

@@ -3,27 +3,29 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../auth/AuthContext';
+import { useAuth } from '../auth/AuthContext.jsx';
 import { useState } from 'react';
 import '../styles/login.css';
 
 const loginSchema = z.object({
   email: z.string().email('Enter a valid email'),
-  password: z.string().min(6, 'Password must be at least 6 characters')
+  password: z.string().min(6, 'Password must be at least 6 characters'),
 });
-
-type LoginForm = z.infer<typeof loginSchema>;
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const { login } = useAuth();
   const [submitError, setSubmitError] = useState('');
   const [rememberMe, setRememberMe] = useState(true);
-  const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<LoginForm>({
-    resolver: zodResolver(loginSchema)
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm({
+    resolver: zodResolver(loginSchema),
   });
 
-  const onSubmit = async (data: LoginForm) => {
+  const onSubmit = async (data) => {
     setSubmitError('');
     try {
       await login(data.email, data.password);
@@ -57,8 +59,6 @@ export default function LoginPage() {
               <Box className="hero-panel__badge-alt" />
             </Box>
           </Box>
-
-          
         </Box>
 
         <Box className="page-form">
