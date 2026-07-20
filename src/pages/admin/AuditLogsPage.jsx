@@ -40,6 +40,8 @@ export default function AuditLogsPage() {
             <TableHead>
               <TableRow>
                 <TableCell>Company</TableCell>
+                <TableCell>Invoice</TableCell>
+                <TableCell>Product</TableCell>
                 <TableCell>Entity</TableCell>
                 <TableCell>Action</TableCell>
                 <TableCell>Performed By</TableCell>
@@ -50,6 +52,8 @@ export default function AuditLogsPage() {
               {auditLogs.map((log) => (
                 <TableRow key={log.id}>
                   <TableCell>{log.company}</TableCell>
+                  <TableCell>{log.invoiceNumber ?? '-'}</TableCell>
+                  <TableCell>{log.productName ?? '-'}</TableCell>
                   <TableCell>{log.entity ?? '-'}</TableCell>
                   <TableCell>{log.action}</TableCell>
                   <TableCell>{log.performedBy}</TableCell>

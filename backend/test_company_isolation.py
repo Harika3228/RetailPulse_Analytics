@@ -150,6 +150,94 @@ class CompanyIsolationTests(unittest.TestCase):
         # Prevent unused variable lint noise for explicit company id capture.
         self.assertIsInstance(company_a, int)
 
+    def test_company_admin_cannot_access_other_company_sales_transactions(self):
+        suffix_a = uuid.uuid4().hex[:8]
+        suffix_b = uuid.uuid4().hex[:8]
+
+        token_a, _company_a = self._register_company_admin(suffix_a)
+        token_b, _company_b = self._register_company_admin(suffix_b)
+
+        category_response = self.client.post(
+            "/categories",
+            headers={"Authorization": f"Bearer {token_a}"},
+            json={"name": f"SalesCat-{suffix_a}", "description": "Sales category", "status": "active"},
+        )
+        self.assertEqual(category_response.status_code, 200)
+        category_id = category_response.json()["id"]
+
+        product_response = self.client.post(
+            "/products",
+            headers={"Authorization": f"Bearer {token_a}"},
+            json={
+                "name": f"SalesProduct-{suffix_a}",
+                "sku": f"SLS-{suffix_a}",
+                "categoryId": category_id,
+                "brand": "RetailPulse",
+                "description": "Isolation sales product",
+                "unitPrice": 25.0,
+                "costPrice": 10.0,
+                "initialStockQuantity": 10,
+                "unitOfMeasure": "pcs",
+                "status": "active",
+            },
+        )
+        self.assertEqual(product_response.status_code, 200)
+        product_id = product_response.json()["id"]
+
+        create_sale = self.client.post(
+            "/sales/transactions",
+            headers={"Authorization": f"Bearer {token_a}"},
+            json={
+                "productId": product_id,
+                "quantity": 2,
+                "unitPrice": 25.0,
+                "customerName": "Isolation Buyer",
+                "saleDateTime": "2026-07-19T10:00:00",
+                "salesChannel": "In-Store",
+                "paymentMethod": "Cash",
+                "discountAmount": 0,
+                "taxAmount": 0,
+            },
+        )
+        self.assertEqual(create_sale.status_code, 200)
+        transaction_id = create_sale.json()["transactionId"]
+
+        list_sales_b = self.client.get(
+            "/sales/transactions",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        self.assertEqual(list_sales_b.status_code, 200)
+        self.assertFalse(any(item["transactionId"] == transaction_id for item in list_sales_b.json()))
+
+        get_foreign_sale = self.client.get(
+            f"/sales/transactions/{transaction_id}",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        self.assertEqual(get_foreign_sale.status_code, 404)
+
+        update_foreign_sale = self.client.put(
+            f"/sales/transactions/{transaction_id}",
+            headers={"Authorization": f"Bearer {token_b}"},
+            json={
+                "productId": product_id,
+                "quantity": 1,
+                "unitPrice": 25.0,
+                "customerName": "Hack Buyer",
+                "saleDateTime": "2026-07-19T10:30:00",
+                "salesChannel": "Online",
+                "paymentMethod": "Card",
+                "discountAmount": 0,
+                "taxAmount": 0,
+            },
+        )
+        self.assertEqual(update_foreign_sale.status_code, 404)
+
+        delete_foreign_sale = self.client.delete(
+            f"/sales/transactions/{transaction_id}",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        self.assertEqual(delete_foreign_sale.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()

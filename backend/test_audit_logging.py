@@ -3,7 +3,9 @@ import uuid
 
 from fastapi.testclient import TestClient
 
-from backend.main import AuditLog, SessionLocal, app
+from backend.main import app
+from backend.models import AuditLog
+from backend.database import SessionLocal
 
 
 class AuditLoggingTests(unittest.TestCase):

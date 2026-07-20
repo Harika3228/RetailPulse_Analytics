@@ -4,6 +4,11 @@ import { useMemo } from 'react';
 import LoginPage from './pages/LoginPage.jsx';
 import RegisterPage from './pages/RegisterPage.jsx';
 import DashboardSummaryPage from './pages/admin/DashboardSummaryPage.jsx';
+import SalesDashboardPage from './pages/admin/SalesDashboardPage.jsx';
+import SalesPage from './pages/admin/SalesPage.jsx';
+import SalesDetailsPage from './pages/admin/SalesDetailsPage.jsx';
+import SalesInvoicePage from './pages/admin/SalesInvoicePage.jsx';
+import NotificationsPage from './pages/admin/NotificationsPage.jsx';
 import CategoriesPage from './pages/admin/CategoriesPage.jsx';
 import ProductsPage from './pages/admin/ProductsPage.jsx';
 import ProductDetailsPage from './pages/admin/ProductDetailsPage.jsx';
@@ -57,9 +62,49 @@ function AppRoutes() {
 				}
 			/>
 			<Route
+					path="/sales"
+					element={
+						<RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+							<SalesDashboardPage />
+						</RoleProtectedRoute>
+					}
+				/>
+				<Route
+					path="/sales/list"
+					element={
+						<RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+							<SalesPage />
+						</RoleProtectedRoute>
+					}
+				/>
+				<Route
+					path="/sales/:transactionId"
+					element={
+						<RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+							<SalesDetailsPage />
+						</RoleProtectedRoute>
+					}
+				/>
+				<Route
+					path="/sales/:transactionId/invoice"
+					element={
+						<RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+							<SalesInvoicePage />
+						</RoleProtectedRoute>
+					}
+				/>
+				<Route
+					path="/notifications"
+					element={
+						<RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+							<NotificationsPage />
+						</RoleProtectedRoute>
+					}
+				/>
+				<Route
 				path="/categories"
 				element={
-					<RoleProtectedRoute allowedRoles={['super_admin', 'company_admin']}>
+						<RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
 						<CategoriesPage />
 					</RoleProtectedRoute>
 				}
@@ -67,7 +112,7 @@ function AppRoutes() {
 			<Route
 				path="/products"
 				element={
-					<RoleProtectedRoute allowedRoles={['super_admin', 'company_admin']}>
+						<RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
 						<ProductsPage />
 					</RoleProtectedRoute>
 				}
@@ -75,7 +120,7 @@ function AppRoutes() {
 			<Route
 				path="/products/:productId"
 				element={
-					<RoleProtectedRoute allowedRoles={['super_admin', 'company_admin']}>
+						<RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
 						<ProductDetailsPage />
 					</RoleProtectedRoute>
 				}
@@ -83,7 +128,7 @@ function AppRoutes() {
 			<Route
 				path="/audit-logs"
 				element={
-					<RoleProtectedRoute allowedRoles={['super_admin', 'company_admin']}>
+						<RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
 						<AuditLogsPage />
 					</RoleProtectedRoute>
 				}

@@ -331,6 +331,7 @@ export default function ProductsPage() {
             <MenuItem value="all">Status: All</MenuItem>
             <MenuItem value="active">Status: Active</MenuItem>
             <MenuItem value="inactive">Status: Inactive</MenuItem>
+            <MenuItem value="out_of_stock">Status: Out of Stock</MenuItem>
           </TextField>
           <TextField
             select
@@ -374,9 +375,16 @@ export default function ProductsPage() {
                   <TableCell>{product.stockQuantity}</TableCell>
                   <TableCell>
                     <Stack direction="row" alignItems="center" spacing={1}>
-                      <Typography>{product.status === 'active' ? 'Active' : 'Inactive'}</Typography>
+                      <Typography>
+                        {product.status === 'active'
+                          ? 'Active'
+                          : product.status === 'out_of_stock'
+                            ? 'Out of Stock'
+                            : 'Inactive'}
+                      </Typography>
                       <Switch
                         checked={product.status === 'active'}
+                        disabled={product.status === 'out_of_stock'}
                         onChange={(event) => toggleProductStatus(product, event.target.checked)}
                       />
                     </Stack>
