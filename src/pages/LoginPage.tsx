@@ -3,7 +3,7 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../auth/AuthContext.jsx';
+import { useAuth } from '../auth/AuthContext.tsx';
 import { useState } from 'react';
 import '../styles/login.css';
 
@@ -21,11 +21,11 @@ export default function LoginPage() {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-  } = useForm({
+  } = useForm<{ email: string; password: string }>({
     resolver: zodResolver(loginSchema),
   });
 
-  const onSubmit = async (data) => {
+  const onSubmit = async (data: { email: string; password: string }) => {
     setSubmitError('');
     try {
       await login(data.email, data.password);
@@ -74,7 +74,7 @@ export default function LoginPage() {
                   fullWidth
                   {...register('email')}
                   error={Boolean(errors.email)}
-                  helperText={errors.email?.message ?? ''}
+                  helperText={typeof errors.email?.message === 'string' ? errors.email.message : ''}
                   variant="outlined"
                 />
                 <TextField
@@ -84,7 +84,7 @@ export default function LoginPage() {
                   fullWidth
                   {...register('password')}
                   error={Boolean(errors.password)}
-                  helperText={errors.password?.message ?? ''}
+                  helperText={typeof errors.password?.message === 'string' ? errors.password.message : ''}
                   variant="outlined"
                 />
                 <Stack className="button-row">

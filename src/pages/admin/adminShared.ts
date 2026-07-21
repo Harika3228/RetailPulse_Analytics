@@ -3,7 +3,7 @@ export const adminOnlyItems = new Set(['Categories', 'Products', 'Audit Logs']);
 
 export const sidebarRouteMap = {
   Dashboard: '/dashboard',
-  Inventory: '/dashboard',
+  Inventory: '/inventory',
   Categories: '/categories',
   Products: '/products',
   Sales: '/sales',
@@ -19,18 +19,20 @@ const apiBases = envApiBase
   : ['http://127.0.0.1:8000', 'http://127.0.0.1:8001', 'http://127.0.0.1:8002'];
 
 export class HttpError extends Error {
-  constructor(status, message) {
+  status: number;
+
+  constructor(status: number, message: string) {
     super(message);
     this.status = status;
   }
 }
 
-export function normalizeRole(role) {
+export function normalizeRole(role?: string) {
   return (role ?? '').toLowerCase().replace(/\s+/g, '_');
 }
 
-export async function apiRequest(path, token, init = {}) {
-  let lastError;
+export async function apiRequest(path: string, token: string, init: RequestInit = {}) {
+  let lastError: unknown;
   for (const base of apiBases) {
     try {
       const response = await fetch(`${base}${path}`, {
@@ -70,21 +72,22 @@ export async function apiRequest(path, token, init = {}) {
   throw new Error('API is unreachable. Ensure backend is running.');
 }
 
-export function formatCurrency(value) {
+export function formatCurrency(value: number | string | null | undefined) {
+  const numericValue = typeof value === 'string' ? Number(value) : (value ?? 0);
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
     currency: 'INR',
     maximumFractionDigits: 2,
-  }).format(value || 0);
+  }).format(Number.isFinite(numericValue) ? numericValue : 0);
 }
 
-export function formatDate(value) {
+export function formatDate(value: string | Date | null | undefined) {
   if (!value) {
     return '-';
   }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return value;
+    return String(value);
   }
   return date.toLocaleDateString('en-IN', {
     day: '2-digit',

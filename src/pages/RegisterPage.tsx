@@ -3,7 +3,7 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../auth/AuthContext.jsx';
+import { useAuth } from '../auth/AuthContext.tsx';
 import { useState } from 'react';
 import '../styles/register.css';
 
@@ -32,11 +32,11 @@ export default function RegisterPage() {
     register: formRegister,
     handleSubmit,
     formState: { errors, isSubmitting },
-  } = useForm({
+  } = useForm<Record<string, string>>({
     resolver: zodResolver(registerSchema),
   });
 
-  const onSubmit = async (data) => {
+  const onSubmit = async (data: Record<string, string>) => {
     setSubmitError('');
     try {
       await register({ ...data });
@@ -88,31 +88,31 @@ export default function RegisterPage() {
               <form onSubmit={handleSubmit(onSubmit)}>
                 <Grid container spacing={2} className="register-form-grid">
                   <Grid item xs={12} md={6}>
-                    <TextField className="text-input" label="Company Name" fullWidth {...formRegister('companyName')} error={Boolean(errors.companyName)} helperText={errors.companyName?.message ?? ''} />
+                    <TextField className="text-input" label="Company Name" fullWidth {...formRegister('companyName')} error={Boolean(errors.companyName)} helperText={typeof errors.companyName?.message === 'string' ? errors.companyName.message : ''} />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField className="text-input" label="Industry" fullWidth {...formRegister('industry')} error={Boolean(errors.industry)} helperText={errors.industry?.message ?? ''} />
+                    <TextField className="text-input" label="Industry" fullWidth {...formRegister('industry')} error={Boolean(errors.industry)} helperText={typeof errors.industry?.message === 'string' ? errors.industry.message : ''} />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField className="text-input" label="Company Email" fullWidth {...formRegister('companyEmail')} error={Boolean(errors.companyEmail)} helperText={errors.companyEmail?.message ?? ''} />
+                    <TextField className="text-input" label="Company Email" fullWidth {...formRegister('companyEmail')} error={Boolean(errors.companyEmail)} helperText={typeof errors.companyEmail?.message === 'string' ? errors.companyEmail.message : ''} />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField className="text-input" label="Company Phone" fullWidth {...formRegister('companyPhone')} error={Boolean(errors.companyPhone)} helperText={errors.companyPhone?.message ?? ''} />
+                    <TextField className="text-input" label="Company Phone" fullWidth {...formRegister('companyPhone')} error={Boolean(errors.companyPhone)} helperText={typeof errors.companyPhone?.message === 'string' ? errors.companyPhone.message : ''} />
                   </Grid>
                   <Grid item xs={12}>
-                    <TextField className="text-input" label="Company Address" fullWidth {...formRegister('companyAddress')} error={Boolean(errors.companyAddress)} helperText={errors.companyAddress?.message ?? ''} />
+                    <TextField className="text-input" label="Company Address" fullWidth {...formRegister('companyAddress')} error={Boolean(errors.companyAddress)} helperText={typeof errors.companyAddress?.message === 'string' ? errors.companyAddress.message : ''} />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField className="text-input" label="Owner Name" fullWidth {...formRegister('ownerName')} error={Boolean(errors.ownerName)} helperText={errors.ownerName?.message ?? ''} />
+                    <TextField className="text-input" label="Owner Name" fullWidth {...formRegister('ownerName')} error={Boolean(errors.ownerName)} helperText={typeof errors.ownerName?.message === 'string' ? errors.ownerName.message : ''} />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField className="text-input" label="Owner Email" fullWidth {...formRegister('ownerEmail')} error={Boolean(errors.ownerEmail)} helperText={errors.ownerEmail?.message ?? ''} />
+                    <TextField className="text-input" label="Owner Email" fullWidth {...formRegister('ownerEmail')} error={Boolean(errors.ownerEmail)} helperText={typeof errors.ownerEmail?.message === 'string' ? errors.ownerEmail.message : ''} />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField className="text-input" label="Password" type="password" fullWidth {...formRegister('password')} error={Boolean(errors.password)} helperText={errors.password?.message ?? ''} />
+                    <TextField className="text-input" label="Password" type="password" fullWidth {...formRegister('password')} error={Boolean(errors.password)} helperText={typeof errors.password?.message === 'string' ? errors.password.message : ''} />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <TextField className="text-input" label="Confirm Password" type="password" fullWidth {...formRegister('confirmPassword')} error={Boolean(errors.confirmPassword)} helperText={errors.confirmPassword?.message ?? ''} />
+                    <TextField className="text-input" label="Confirm Password" type="password" fullWidth {...formRegister('confirmPassword')} error={Boolean(errors.confirmPassword)} helperText={typeof errors.confirmPassword?.message === 'string' ? errors.confirmPassword.message : ''} />
                   </Grid>
                 </Grid>
                 {submitError ? <Alert severity="error">{submitError}</Alert> : null}

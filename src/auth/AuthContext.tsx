@@ -1,15 +1,38 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
-const AuthContext = createContext(undefined);
+type AuthUser = {
+  id?: number;
+  email?: string;
+  name?: string;
+  role?: string;
+  [key: string]: unknown;
+};
+
+type AuthContextValue = {
+  user: AuthUser | null;
+  token: string | null;
+  isAuthenticated: boolean;
+  login: (email: string, password: string) => Promise<void>;
+  register: (payload: Record<string, unknown>) => Promise<void>;
+  logout: () => void;
+};
+
+type ApiOptions = {
+  method?: string;
+  token?: string;
+  body?: unknown;
+};
+
+const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 const envApiBase = import.meta?.env?.VITE_API_BASE_URL;
 const apiBases = envApiBase
   ? [envApiBase]
   : ['http://127.0.0.1:8000', 'http://127.0.0.1:8001', 'http://127.0.0.1:8002'];
 
-async function apiRequest(path, options = {}) {
+async function apiRequest(path: string, options: ApiOptions = {}) {
   const method = options.method ?? 'GET';
-  let lastError;
+  let lastError: unknown;
 
   for (const base of apiBases) {
     try {
@@ -47,10 +70,10 @@ async function apiRequest(path, options = {}) {
   throw new Error('Unable to reach backend API');
 }
 
-export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
-  const [token, setToken] = useState(localStorage.getItem('retailpulse-token'));
-  const [refreshToken, setRefreshToken] = useState(localStorage.getItem('retailpulse-refresh-token'));
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [token, setToken] = useState<string | null>(localStorage.getItem('retailpulse-token'));
+  const [refreshToken, setRefreshToken] = useState<string | null>(localStorage.getItem('retailpulse-refresh-token'));
 
   const logout = () => {
     localStorage.removeItem('retailpulse-token');
@@ -60,7 +83,7 @@ export function AuthProvider({ children }) {
     setUser(null);
   };
 
-  const persistAuth = (accessToken, refreshTokenValue, authUser) => {
+  const persistAuth = (accessToken: string, refreshTokenValue: string, authUser: AuthUser) => {
     localStorage.setItem('retailpulse-token', accessToken);
     localStorage.setItem('retailpulse-refresh-token', refreshTokenValue);
     setToken(accessToken);
@@ -105,7 +128,7 @@ export function AuthProvider({ children }) {
     loadSession();
   }, []);
 
-  const login = async (email, password) => {
+  const login = async (email: string, password: string) => {
     const response = await apiRequest('/auth/login', {
       method: 'POST',
       body: { email, password },
@@ -114,7 +137,7 @@ export function AuthProvider({ children }) {
     persistAuth(access_token, nextRefreshToken, authUser);
   };
 
-  const register = async (payload) => {
+  const register = async (payload: Record<string, unknown>) => {
     const response = await apiRequest('/auth/register', {
       method: 'POST',
       body: payload,

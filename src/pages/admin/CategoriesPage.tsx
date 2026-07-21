@@ -14,11 +14,11 @@ import {
   Typography,
 } from '@mui/material';
 import { useCallback, useEffect, useState } from 'react';
-import { useAuth } from '../../auth/AuthContext.jsx';
-import AdminLayout from './AdminLayout.jsx';
+import { useAuth } from '../../auth/AuthContext.tsx';
+import AdminLayout from './AdminLayout.tsx';
 import { apiRequest } from './adminShared.js';
-import CategoryDialog from '../../components/admin/CategoryDialog.jsx';
-import ConfirmDeleteDialog from '../../components/admin/ConfirmDeleteDialog.jsx';
+import CategoryDialog from '../../components/admin/CategoryDialog.tsx';
+import ConfirmDeleteDialog from '../../components/admin/ConfirmDeleteDialog.tsx';
 
 const defaultCategoryForm = {
   name: '',

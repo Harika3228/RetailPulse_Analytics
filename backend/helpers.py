@@ -9,10 +9,15 @@ from backend.models import (
     SalesTransactionLine,
 )
 from backend.schemas import (
+    InventoryDashboardSummaryResponse,
     NotificationResponse,
-    ProductResponse, ProductSummaryResponse, SalesDashboardSummaryResponse,
-    SalesLineRequest, SalesLineResponse,
-    SalesTransactionRequest, SalesTransactionResponse,
+    ProductResponse,
+    ProductSummaryResponse,
+    SalesDashboardSummaryResponse,
+    SalesLineRequest,
+    SalesLineResponse,
+    SalesTransactionRequest,
+    SalesTransactionResponse,
 )
 
 LOW_STOCK_THRESHOLD = 5
@@ -246,6 +251,29 @@ def _get_company_sales_summary(db, company_id: int) -> SalesDashboardSummaryResp
         totalRevenue=total_revenue,
         totalOrders=total_orders,
         averageOrderValue=average_order_value,
+    )
+
+
+def _get_company_inventory_summary(db, company_id: int) -> InventoryDashboardSummaryResponse:
+    products = db.query(Product).filter(Product.companyId == company_id).all()
+    total_products = len(products)
+    total_inventory_quantity = sum(
+        int(product.stockQuantity if product.stockQuantity is not None else product.initialStockQuantity or 0)
+        for product in products
+    )
+    low_stock_products = 0
+    out_of_stock_products = 0
+    for product in products:
+        current_stock = int(product.stockQuantity if product.stockQuantity is not None else product.initialStockQuantity or 0)
+        if current_stock <= 0:
+            out_of_stock_products += 1
+        elif current_stock <= LOW_STOCK_THRESHOLD:
+            low_stock_products += 1
+    return InventoryDashboardSummaryResponse(
+        totalProducts=total_products,
+        totalInventoryQuantity=total_inventory_quantity,
+        lowStockProducts=low_stock_products,
+        outOfStockProducts=out_of_stock_products,
     )
 
 

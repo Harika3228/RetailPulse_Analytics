@@ -4,6 +4,7 @@ from fastapi import APIRouter, Header
 
 from backend.controllers.dashboard_controller import (
     dashboard,
+    dashboard_inventory_summary,
     dashboard_product_summary,
     dashboard_sales_summary,
     get_notifications,
@@ -14,6 +15,7 @@ from backend.database import DbDependency
 from backend.schemas import (
     AuditLogResponse,
     DashboardResponse,
+    InventoryDashboardSummaryResponse,
     NotificationResponse,
     ProductSummaryResponse,
     SalesDashboardSummaryResponse,
@@ -35,6 +37,11 @@ def dashboard_product_summary_route(db: DbDependency, authorization: str | None 
 @router.get("/dashboard/sales-summary", response_model=SalesDashboardSummaryResponse)
 def dashboard_sales_summary_route(db: DbDependency, authorization: str | None = Header(default=None, alias="Authorization")):
     return dashboard_sales_summary(db, authorization)
+
+
+@router.get("/dashboard/inventory-summary", response_model=InventoryDashboardSummaryResponse)
+def dashboard_inventory_summary_route(db: DbDependency, authorization: str | None = Header(default=None, alias="Authorization")):
+    return dashboard_inventory_summary(db, authorization)
 
 
 @router.get("/notifications", response_model=list[NotificationResponse])

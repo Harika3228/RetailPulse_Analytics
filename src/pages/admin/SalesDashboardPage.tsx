@@ -1,8 +1,8 @@
 import { Alert, Box, Button, Card, Stack, Typography } from '@mui/material';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../../auth/AuthContext.jsx';
-import AdminLayout from './AdminLayout.jsx';
+import { useAuth } from '../../auth/AuthContext.tsx';
+import AdminLayout from './AdminLayout.tsx';
 import { apiRequest, formatCurrency } from './adminShared.js';
 import { formatSaleDatetime } from './salesShared.js';
 

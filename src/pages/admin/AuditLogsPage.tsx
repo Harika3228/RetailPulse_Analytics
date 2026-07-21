@@ -1,7 +1,7 @@
 import { Alert, Box, Button, Card, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from '@mui/material';
 import { useCallback, useEffect, useState } from 'react';
-import { useAuth } from '../../auth/AuthContext.jsx';
-import AdminLayout from './AdminLayout.jsx';
+import { useAuth } from '../../auth/AuthContext.tsx';
+import AdminLayout from './AdminLayout.tsx';
 import { apiRequest } from './adminShared.js';
 
 export default function AuditLogsPage() {

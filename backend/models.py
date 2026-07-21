@@ -131,4 +131,19 @@ class SalesTransactionLine(Base):
     createdAt = Column(DateTime, default=datetime.now(timezone.utc))
 
 
+class StockAdjustment(Base):
+    __tablename__ = "stock_adjustments"
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    productId = Column(Integer, index=True)
+    adjustmentType = Column(String, index=True)
+    quantity = Column(Integer)
+    reason = Column(String)
+    remarks = Column(String)
+    adjustedBy = Column(String)
+    adjustedByUserId = Column(Integer, nullable=True)
+    adjustmentDate = Column(DateTime, default=datetime.now(timezone.utc))
+    createdAt = Column(DateTime, default=datetime.now(timezone.utc))
+
+
 Base.metadata.create_all(bind=engine)

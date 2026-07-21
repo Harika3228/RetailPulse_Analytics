@@ -1,8 +1,8 @@
 import { Alert, Box, Button, Card, Stack, Typography } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useAuth } from '../../auth/AuthContext.jsx';
-import AdminLayout from './AdminLayout.jsx';
+import { useAuth } from '../../auth/AuthContext.tsx';
+import AdminLayout from './AdminLayout.tsx';
 import { apiRequest, formatCurrency, formatDate } from './adminShared.js';
 
 export default function ProductDetailsPage() {

@@ -16,10 +16,10 @@ import {
 } from '@mui/material';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../../auth/AuthContext.jsx';
-import ConfirmDeleteDialog from '../../components/admin/ConfirmDeleteDialog.jsx';
-import SaleDialog from '../../components/admin/SaleDialog.jsx';
-import AdminLayout from './AdminLayout.jsx';
+import { useAuth } from '../../auth/AuthContext.tsx';
+import ConfirmDeleteDialog from '../../components/admin/ConfirmDeleteDialog.tsx';
+import SaleDialog from '../../components/admin/SaleDialog.tsx';
+import AdminLayout from './AdminLayout.tsx';
 import { apiRequest, formatCurrency } from './adminShared.js';
 import {
   calculateSaleTotal,

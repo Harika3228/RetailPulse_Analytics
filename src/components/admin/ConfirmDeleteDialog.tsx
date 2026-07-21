@@ -1,6 +1,15 @@
 import { Button, Dialog, DialogActions, DialogContent, DialogTitle, Typography } from '@mui/material';
 
-export default function ConfirmDeleteDialog({ open, title, description, entityName, onCancel, onConfirm }) {
+type ConfirmDeleteDialogProps = {
+  open: boolean;
+  title: string;
+  description?: string;
+  entityName?: string;
+  onCancel: () => void;
+  onConfirm: () => void | Promise<void>;
+};
+
+export default function ConfirmDeleteDialog({ open, title, description, entityName, onCancel, onConfirm }: ConfirmDeleteDialogProps) {
   return (
     <Dialog open={open} onClose={onCancel} maxWidth="xs" fullWidth>
       <DialogTitle>{title}</DialogTitle>

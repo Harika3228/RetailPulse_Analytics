@@ -1,4 +1,4 @@
-export function toLocalDatetimeInput(value = new Date()) {
+export function toLocalDatetimeInput(value: Date | string = new Date()) {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) {
     return '';
@@ -7,13 +7,13 @@ export function toLocalDatetimeInput(value = new Date()) {
   return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
-export function formatSaleDatetime(value) {
+export function formatSaleDatetime(value: string | Date | null | undefined) {
   if (!value) {
     return '-';
   }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return value;
+    return String(value);
   }
   return new Intl.DateTimeFormat('en-IN', {
     dateStyle: 'medium',
@@ -37,7 +37,7 @@ export function defaultSaleForm() {
   };
 }
 
-export function saleTransactionToForm(transaction) {
+export function saleTransactionToForm(transaction: Record<string, any> | null | undefined) {
   const firstLine = transaction?.lines?.[0] ?? null;
   return {
     productId: firstLine ? String(firstLine.productId) : '',
@@ -54,7 +54,7 @@ export function saleTransactionToForm(transaction) {
   };
 }
 
-export function saleFormToPayload(form) {
+export function saleFormToPayload(form: Record<string, any>) {
   return {
     productId: Number(form.productId),
     quantity: Number(form.quantity),
@@ -68,7 +68,7 @@ export function saleFormToPayload(form) {
   };
 }
 
-export function isSaleFormIncomplete(form) {
+export function isSaleFormIncomplete(form: Record<string, any>) {
   return (
     !String(form.productId).trim() ||
     !String(form.customerName).trim() ||
@@ -80,7 +80,7 @@ export function isSaleFormIncomplete(form) {
   );
 }
 
-export function calculateSaleTotal(form) {
+export function calculateSaleTotal(form: Record<string, any>) {
   const quantity = Number(form.quantity || 0);
   const unitPrice = Number(form.unitPrice || 0);
   const discount = Number(form.discountAmount || 0);
@@ -89,13 +89,13 @@ export function calculateSaleTotal(form) {
   return Math.max(0, subtotal - discount + tax);
 }
 
-export function calculateSaleSubtotal(form) {
+export function calculateSaleSubtotal(form: Record<string, any>) {
   const quantity = Number(form.quantity || 0);
   const unitPrice = Number(form.unitPrice || 0);
   return quantity * unitPrice;
 }
 
-export function getSaleValidationError(form, products) {
+export function getSaleValidationError(form: Record<string, any>, products: Array<Record<string, any>>) {
   if (!String(form.productId).trim()) {
     return 'Please Select Product.';
   }

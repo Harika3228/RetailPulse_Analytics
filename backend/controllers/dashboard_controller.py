@@ -4,9 +4,9 @@ from fastapi import HTTPException
 
 from backend.auth_utils import get_company_for_user, get_current_user
 from backend.database import DbDependency
-from backend.helpers import _ensure_admin, _get_company_product_summary, _get_company_sales_summary, create_audit_log, list_company_notifications
+from backend.helpers import _ensure_admin, _get_company_inventory_summary, _get_company_product_summary, _get_company_sales_summary, create_audit_log, list_company_notifications
 from backend.models import AuditLog, User
-from backend.schemas import AuditLogResponse, DashboardResponse, NotificationResponse, ProductSummaryResponse, SalesDashboardSummaryResponse
+from backend.schemas import AuditLogResponse, DashboardResponse, InventoryDashboardSummaryResponse, NotificationResponse, ProductSummaryResponse, SalesDashboardSummaryResponse
 
 
 def dashboard(db: DbDependency, authorization: str | None = None) -> DashboardResponse:
@@ -43,6 +43,14 @@ def dashboard_sales_summary(db: DbDependency, authorization: str | None = None) 
     token = authorization.split(" ", 1)[1]
     user = get_current_user(db, token)
     return _get_company_sales_summary(db, user.companyId)
+
+
+def dashboard_inventory_summary(db: DbDependency, authorization: str | None = None) -> InventoryDashboardSummaryResponse:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    token = authorization.split(" ", 1)[1]
+    user = get_current_user(db, token)
+    return _get_company_inventory_summary(db, user.companyId)
 
 
 def get_notifications(db: DbDependency, limit: int = 20, authorization: str | None = None) -> list[NotificationResponse]:

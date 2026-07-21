@@ -17,11 +17,11 @@ import {
 } from '@mui/material';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../../auth/AuthContext.jsx';
-import AdminLayout from './AdminLayout.jsx';
+import { useAuth } from '../../auth/AuthContext.tsx';
+import AdminLayout from './AdminLayout.tsx';
 import { apiRequest, formatCurrency } from './adminShared.js';
-import ProductDialog from '../../components/admin/ProductDialog.jsx';
-import ConfirmDeleteDialog from '../../components/admin/ConfirmDeleteDialog.jsx';
+import ProductDialog from '../../components/admin/ProductDialog.tsx';
+import ConfirmDeleteDialog from '../../components/admin/ConfirmDeleteDialog.tsx';
 
 const defaultProductForm = {
   name: '',
@@ -41,8 +41,8 @@ export default function ProductsPage() {
   const navigate = useNavigate();
 
   const [errorMessage, setErrorMessage] = useState('');
-  const [categories, setCategories] = useState([]);
-  const [products, setProducts] = useState([]);
+  const [categories, setCategories] = useState<Array<{ id: number; name: string }>>([]);
+  const [products, setProducts] = useState<Array<Record<string, any>>>([]);
 
   const [productQuery, setProductQuery] = useState('');
   const [productCategoryFilter, setProductCategoryFilter] = useState('all');
@@ -54,11 +54,11 @@ export default function ProductsPage() {
   const [productDeleteDialogOpen, setProductDeleteDialogOpen] = useState(false);
   const [productFormError, setProductFormError] = useState('');
   const [productForm, setProductForm] = useState(defaultProductForm);
-  const [editingProductId, setEditingProductId] = useState(null);
-  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [editingProductId, setEditingProductId] = useState<number | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<Record<string, any> | null>(null);
 
   const categoryById = useMemo(() => {
-    const map = new Map();
+    const map = new Map<number, string>();
     categories.forEach((category) => {
       map.set(category.id, category.name);
     });
@@ -66,7 +66,7 @@ export default function ProductsPage() {
   }, [categories]);
 
   const brandOptions = useMemo(() => {
-    const brands = new Set();
+    const brands = new Set<string>();
     products.forEach((product) => {
       if (product.brand?.trim()) {
         brands.add(product.brand.trim());
@@ -140,7 +140,7 @@ export default function ProductsPage() {
     setProductDialogOpen(true);
   };
 
-  const openEditProduct = (product) => {
+  const openEditProduct = (product: Record<string, any>) => {
     setProductForm({
       name: product.name,
       sku: product.sku,
@@ -238,7 +238,7 @@ export default function ProductsPage() {
     }
   };
 
-  const confirmDeleteProduct = (product) => {
+  const confirmDeleteProduct = (product: Record<string, any>) => {
     setSelectedProduct(product);
     setProductDeleteDialogOpen(true);
   };
@@ -259,7 +259,7 @@ export default function ProductsPage() {
     }
   };
 
-  const toggleProductStatus = async (product, checked) => {
+  const toggleProductStatus = async (product: Record<string, any>, checked: boolean) => {
     if (!token) {
       return;
     }

@@ -1,7 +1,7 @@
 import { Box, Button, Card, Chip, Stack, Typography } from '@mui/material';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useAuth } from '../../auth/AuthContext.jsx';
+import { useAuth } from '../../auth/AuthContext.tsx';
 import { adminOnlyItems, normalizeRole, sidebarItems, sidebarRouteMap, apiRequest } from './adminShared';
 import '../../styles/dashboard.css';
 
@@ -11,6 +11,9 @@ function getSectionFromPath(pathname) {
   }
   if (pathname === '/notifications') {
     return 'Notifications';
+  }
+  if (pathname.startsWith('/inventory')) {
+    return 'Inventory';
   }
   if (pathname === '/categories') {
     return 'Categories';

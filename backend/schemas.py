@@ -94,6 +94,13 @@ class SalesDashboardSummaryResponse(BaseModel):
     averageOrderValue: float
 
 
+class InventoryDashboardSummaryResponse(BaseModel):
+    totalProducts: int
+    totalInventoryQuantity: int
+    lowStockProducts: int
+    outOfStockProducts: int
+
+
 class AuditLogResponse(BaseModel):
     id: int
     company: str
@@ -219,6 +226,80 @@ class ProductResponse(BaseModel):
 
 class ProductStatusRequest(BaseModel):
     status: str
+
+
+class InventoryResponse(BaseModel):
+    productId: int
+    productName: str
+    sku: str
+    categoryId: int | None = None
+    categoryName: str | None = None
+    brand: str
+    currentStock: int
+    reservedStock: int
+    availableStock: int
+    reorderLevel: int
+    stockStatus: str
+    status: str
+    updatedAt: str | None = None
+
+
+class InventoryMovementResponse(BaseModel):
+    id: str
+    productId: int
+    productName: str
+    sku: str
+    movementType: str
+    previousQuantity: int | None = None
+    updatedQuantity: int | None = None
+    quantityChanged: int | None = None
+    reason: str | None = None
+    user: str | None = None
+    reference: str | None = None
+    timestamp: str | None = None
+
+
+class StockAdjustmentRequest(BaseModel):
+    adjustmentType: str
+    quantity: int
+    reason: str
+    remarks: str | None = None
+
+    @field_validator("adjustmentType")
+    @classmethod
+    def validate_adjustment_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"stock_in", "stock_out", "manual_adjustment"}:
+            raise ValueError("Adjustment type must be stock_in, stock_out, or manual_adjustment")
+        return normalized
+
+    @field_validator("quantity")
+    @classmethod
+    def validate_quantity(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return value
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Reason is required")
+        return normalized
+
+
+class StockAdjustmentResponse(BaseModel):
+    id: int
+    productId: int
+    productName: str
+    sku: str
+    adjustmentType: str
+    quantity: int
+    reason: str
+    remarks: str | None = None
+    adjustedBy: str
+    adjustmentDate: str | None = None
 
 
 # ---------------------------------------------------------------------------
