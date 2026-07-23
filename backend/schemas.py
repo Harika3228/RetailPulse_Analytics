@@ -1,6 +1,7 @@
 import re
+from typing import Any
 
-from pydantic import BaseModel, EmailStr, field_validator, model_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +100,28 @@ class InventoryDashboardSummaryResponse(BaseModel):
     totalInventoryQuantity: int
     lowStockProducts: int
     outOfStockProducts: int
+
+
+class AnalyticsDashboardResponse(BaseModel):
+    totalRevenue: float
+    totalOrders: int
+    totalProductsSold: int
+    averageOrderValue: float
+    totalInventoryValue: float
+    lowStockProducts: int
+    outOfStockProducts: int
+    totalCategories: int
+    revenueTrend: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    salesTrend: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    topSellingProducts: list[dict[str, Any]] = Field(default_factory=list)
+    topPerformingCategories: list[dict[str, Any]] = Field(default_factory=list)
+    salesByPaymentMethod: list[dict[str, Any]] = Field(default_factory=list)
+    salesBySalesChannel: list[dict[str, Any]] = Field(default_factory=list)
+    inventoryDistributionByCategory: list[dict[str, Any]] = Field(default_factory=list)
+    stockStatusSummary: dict[str, int] = Field(default_factory=dict)
+    topLowStockProducts: list[dict[str, Any]] = Field(default_factory=list)
+    outOfStockProductDetails: list[dict[str, Any]] = Field(default_factory=list)
+    inventoryValueByCategory: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AuditLogResponse(BaseModel):

@@ -13,10 +13,16 @@ export const sidebarRouteMap = {
   'Audit Logs': '/audit-logs',
 };
 
-const envApiBase = import.meta?.env?.VITE_API_BASE_URL;
-const apiBases = envApiBase
-  ? [envApiBase]
-  : ['http://127.0.0.1:8000', 'http://127.0.0.1:8001', 'http://127.0.0.1:8002'];
+function getApiBases() {
+  const envApiBase = import.meta?.env?.VITE_API_BASE_URL;
+  return envApiBase
+    ? [envApiBase]
+    : ['http://127.0.0.1:8000', 'http://127.0.0.1:8001', 'http://127.0.0.1:8002'];
+}
+
+export function getApiBase() {
+  return getApiBases()[0];
+}
 
 export class HttpError extends Error {
   status: number;
@@ -33,7 +39,7 @@ export function normalizeRole(role?: string) {
 
 export async function apiRequest(path: string, token: string, init: RequestInit = {}) {
   let lastError: unknown;
-  for (const base of apiBases) {
+  for (const base of getApiBases()) {
     try {
       const response = await fetch(`${base}${path}`, {
         ...init,

@@ -5,3 +5,4 @@ bcrypt==4.1.2
 sqlalchemy==2.0.31
 pydantic==2.9.0
 httpx==0.28.1
+psycopg[binary]==3.2.1

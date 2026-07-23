@@ -4,6 +4,8 @@ from fastapi import APIRouter, Header
 
 from backend.controllers.dashboard_controller import (
     dashboard,
+    dashboard_analytics_summary,
+    dashboard_export,
     dashboard_inventory_summary,
     dashboard_product_summary,
     dashboard_sales_summary,
@@ -13,6 +15,7 @@ from backend.controllers.dashboard_controller import (
 )
 from backend.database import DbDependency
 from backend.schemas import (
+    AnalyticsDashboardResponse,
     AuditLogResponse,
     DashboardResponse,
     InventoryDashboardSummaryResponse,
@@ -42,6 +45,58 @@ def dashboard_sales_summary_route(db: DbDependency, authorization: str | None = 
 @router.get("/dashboard/inventory-summary", response_model=InventoryDashboardSummaryResponse)
 def dashboard_inventory_summary_route(db: DbDependency, authorization: str | None = Header(default=None, alias="Authorization")):
     return dashboard_inventory_summary(db, authorization)
+
+
+@router.get("/dashboard/analytics", response_model=AnalyticsDashboardResponse)
+def dashboard_analytics_summary_route(
+    db: DbDependency,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    dateFrom: str | None = None,
+    dateTo: str | None = None,
+    product: str | None = None,
+    category: str | None = None,
+    brand: str | None = None,
+    salesChannel: str | None = None,
+    paymentMethod: str | None = None,
+):
+    return dashboard_analytics_summary(
+        db,
+        authorization,
+        dateFrom=dateFrom,
+        dateTo=dateTo,
+        product=product,
+        category=category,
+        brand=brand,
+        salesChannel=salesChannel,
+        paymentMethod=paymentMethod,
+    )
+
+
+@router.get("/dashboard/export")
+def dashboard_export_route(
+    db: DbDependency,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    format: str = "csv",
+    dateFrom: str | None = None,
+    dateTo: str | None = None,
+    product: str | None = None,
+    category: str | None = None,
+    brand: str | None = None,
+    salesChannel: str | None = None,
+    paymentMethod: str | None = None,
+):
+    return dashboard_export(
+        db,
+        authorization,
+        export_format=format,
+        dateFrom=dateFrom,
+        dateTo=dateTo,
+        product=product,
+        category=category,
+        brand=brand,
+        salesChannel=salesChannel,
+        paymentMethod=paymentMethod,
+    )
 
 
 @router.get("/notifications", response_model=list[NotificationResponse])
