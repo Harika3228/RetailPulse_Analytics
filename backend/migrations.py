@@ -96,6 +96,7 @@ def ensure_schema() -> None:
     audit_columns = {col["name"] for col in inspector.get_columns("audit_logs")}
     category_columns = {col["name"] for col in inspector.get_columns("categories")}
     product_columns = {col["name"] for col in inspector.get_columns("products")}
+    customer_columns = {col["name"] for col in inspector.get_columns("customers")}
     sales_tx_columns = {col["name"] for col in inspector.get_columns("sales")}
     sales_line_columns = {col["name"] for col in inspector.get_columns("sale_items")}
 
@@ -183,6 +184,12 @@ def ensure_schema() -> None:
                 connection.execute(text(f"ALTER TABLE products ADD COLUMN {col} {col_type}"))
         if "status" not in product_columns:
             connection.execute(text("ALTER TABLE products ADD COLUMN status VARCHAR DEFAULT 'active'"))
+
+        # customers
+        if "firstPurchaseDate" not in customer_columns:
+            connection.execute(text("ALTER TABLE customers ADD COLUMN firstPurchaseDate DATETIME"))
+        if "segment" not in customer_columns:
+            connection.execute(text("ALTER TABLE customers ADD COLUMN segment VARCHAR DEFAULT 'new_customer'"))
 
         # sales
         if "invoiceNumber" not in sales_tx_columns:

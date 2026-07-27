@@ -122,6 +122,10 @@ class AnalyticsDashboardResponse(BaseModel):
     topLowStockProducts: list[dict[str, Any]] = Field(default_factory=list)
     outOfStockProductDetails: list[dict[str, Any]] = Field(default_factory=list)
     inventoryValueByCategory: list[dict[str, Any]] = Field(default_factory=list)
+    topCustomersByRevenue: list[dict[str, Any]] = Field(default_factory=list)
+    recentCustomers: list[dict[str, Any]] = Field(default_factory=list)
+    customerGrowthTrend: list[dict[str, Any]] = Field(default_factory=list)
+    customerRevenueContribution: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AuditLogResponse(BaseModel):
@@ -142,6 +146,116 @@ class NotificationResponse(BaseModel):
     message: str
     type: str
     createdAt: str
+
+
+class CustomerRequest(BaseModel):
+    name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    dateOfBirth: str | None = None
+    gender: str | None = None
+    address: str | None = None
+    city: str | None = None
+    state: str | None = None
+    country: str | None = None
+    customerType: str | None = None
+    preferredSalesChannel: str | None = None
+    status: str | None = "active"
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str | None) -> str:
+        if value is None:
+            return ""
+        return value.strip()
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip()
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip()
+
+
+class CustomerResponse(BaseModel):
+    id: int
+    customerId: str | None = None
+    name: str
+    email: str
+    phone: str | None = None
+    dateOfBirth: str | None = None
+    gender: str | None = None
+    address: str | None = None
+    city: str | None = None
+    state: str | None = None
+    country: str | None = None
+    customerType: str | None = None
+    preferredSalesChannel: str | None = None
+    status: str
+    segment: str | None = None
+    totalSpend: float
+    purchaseCount: int
+    lifetimeRevenue: float
+    totalOrders: int
+    averageOrderValue: float
+    lastPurchase: str | None = None
+    favoriteCategory: str | None = None
+    favoriteProduct: str | None = None
+    purchaseFrequency: str | None = None
+    recentOrders: list[dict[str, Any]] = Field(default_factory=list)
+    recentPurchases: list[dict[str, Any]] = Field(default_factory=list)
+    recentPayments: list[dict[str, Any]] = Field(default_factory=list)
+    timeline: list[dict[str, Any]] = Field(default_factory=list)
+    lastPurchaseDate: str | None = None
+    createdAt: str | None = None
+    updatedAt: str | None = None
+
+
+class CustomerStatusRequest(BaseModel):
+    status: str
+
+
+class CustomerAnalyticsResponse(BaseModel):
+    totalCustomers: int
+    activeCustomers: int
+    inactiveCustomers: int
+    newCustomersThisMonth: int
+    returningCustomers: int
+    averageCustomerSpend: float
+    totalRevenueGenerated: float
+    averagePurchaseFrequency: float
+    customerTypeBreakdown: dict[str, int] = Field(default_factory=dict)
+    preferredSalesChannelBreakdown: dict[str, int] = Field(default_factory=dict)
+    customerGrowthTrend: list[dict[str, Any]] = Field(default_factory=list)
+    newVsReturningCustomers: list[dict[str, Any]] = Field(default_factory=list)
+    revenueByCustomerType: list[dict[str, Any]] = Field(default_factory=list)
+    topCustomersByRevenue: list[dict[str, Any]] = Field(default_factory=list)
+    customerPurchaseFrequency: list[dict[str, Any]] = Field(default_factory=list)
+    customerDistributionByLocation: list[dict[str, Any]] = Field(default_factory=list)
+    monthlyCustomerAcquisition: list[dict[str, Any]] = Field(default_factory=list)
+    customerSpendingDistribution: list[dict[str, Any]] = Field(default_factory=list)
+    segmentationSummary: list[dict[str, Any]] = Field(default_factory=list)
+    customersWithPurchases: int
+    recentCustomers: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class CustomerPurchaseHistoryResponse(BaseModel):
+    customerId: int
+    totalOrders: int
+    totalRevenueGenerated: float
+    totalQuantityPurchased: int
+    averageOrderValue: float
+    firstPurchaseDate: str | None = None
+    lastPurchaseDate: str | None = None
+    mostFrequentlyPurchasedProducts: list[dict[str, Any]] = Field(default_factory=list)
+    recentTransactions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

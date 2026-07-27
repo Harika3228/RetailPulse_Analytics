@@ -1,11 +1,11 @@
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
 
 from backend.database import engine
 from backend.models import (
-    AuditLog, Category, Notification, Product, SalesTransaction,
+    AuditLog, Category, Customer, Notification, Product, SalesTransaction,
     SalesTransactionLine,
 )
 from backend.schemas import (
@@ -56,12 +56,11 @@ def create_audit_log(
         db.commit()
 
 
-def create_notification(db, company_id: int, product_id: int, product_name: str, message: str, notification_type: str) -> None:
+def create_notification(db, company_id: int, product_id: int | None = None, product_name: str | None = None, message: str = "", notification_type: str = "info") -> None:
     existing = (
         db.query(Notification)
         .filter(
             Notification.companyId == company_id,
-            Notification.productId == product_id,
             Notification.message == message,
             Notification.type == notification_type,
             Notification.isRead == 0,
@@ -73,8 +72,8 @@ def create_notification(db, company_id: int, product_id: int, product_name: str,
     db.add(
         Notification(
             companyId=company_id,
-            productId=product_id,
-            productName=product_name,
+            productId=product_id or 0,
+            productName=product_name or "",
             message=message,
             type=notification_type,
             isRead=0,
@@ -463,6 +462,38 @@ def _get_company_analytics_summary(
     out_of_stock_product_items = sorted(out_of_stock_product_items, key=lambda item: str(item["name"]))
 
     total_categories = db.query(Category).filter(Category.companyId == company_id).count()
+    customers = db.query(Customer).filter(Customer.companyId == company_id).all()
+    top_customers_by_revenue = [
+        {"name": customer.name or "Unknown", "revenue": round(float(customer.totalSpend or 0), 2), "orders": int(customer.purchaseCount or 0)}
+        for customer in sorted(customers, key=lambda item: float(item.totalSpend or 0), reverse=True)[:8]
+    ]
+    recent_customers = [
+        {
+            "id": customer.id,
+            "name": customer.name or "Unknown",
+            "email": customer.email or "",
+            "status": customer.status or "active",
+            "purchaseCount": int(customer.purchaseCount or 0),
+            "totalSpend": round(float(customer.totalSpend or 0), 2),
+        }
+        for customer in sorted(customers, key=lambda item: item.createdAt or datetime.now(timezone.utc), reverse=True)[:5]
+    ]
+    customer_growth_trend = []
+    for month_index in range(6):
+        month_date = datetime.now(timezone.utc).replace(day=1) - timedelta(days=30 * month_index)
+        month_label = month_date.strftime("%b %Y")
+        month_count = sum(
+            1
+            for customer in customers
+            if customer.createdAt and customer.createdAt.year == month_date.year and customer.createdAt.month == month_date.month
+        )
+        customer_growth_trend.append({"month": month_label, "customers": month_count})
+    customer_growth_trend.reverse()
+    total_customer_revenue = sum(float(customer.totalSpend or 0) for customer in customers)
+    customer_revenue_contribution = []
+    for customer in top_customers_by_revenue:
+        share = round((customer["revenue"] / total_customer_revenue) * 100, 2) if total_customer_revenue else 0
+        customer_revenue_contribution.append({"name": customer["name"], "value": customer["revenue"], "share": share})
     return AnalyticsDashboardResponse(
         totalRevenue=total_revenue,
         totalOrders=total_orders,
@@ -491,6 +522,10 @@ def _get_company_analytics_summary(
         inventoryValueByCategory=[
             {"name": entry["name"], "value": round(float(entry["value"]), 2)} for entry in sorted(inventory_value_by_category.values(), key=lambda item: float(item["value"]), reverse=True)
         ],
+        topCustomersByRevenue=top_customers_by_revenue,
+        recentCustomers=recent_customers,
+        customerGrowthTrend=customer_growth_trend,
+        customerRevenueContribution=customer_revenue_contribution,
     )
 
 

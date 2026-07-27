@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from sqlalchemy import asc, desc
 
 from backend.auth_utils import get_company_for_user, get_current_user
+from backend.controllers.customers_controller import refresh_customer_metrics_for_company
 from backend.database import DbDependency
 from backend.helpers import (
     _apply_sales_stock_delta,
@@ -197,6 +198,7 @@ def create_sales_transaction(payload: SalesTransactionRequest, db: DbDependency,
     tx = SalesTransaction(companyId=user.companyId, createdBy=user.id)
     db.add(tx)
     tx = _save_sales_transaction(db, tx, line_payloads, payload, user)
+    refresh_customer_metrics_for_company(db, user.companyId)
 
     create_audit_log(db, company=company.name, user=user.email,
                      action="Sale Created", entity_name=tx.invoiceNumber, invoice_number=tx.invoiceNumber,
@@ -239,6 +241,7 @@ def update_sales_transaction(transaction_id: int, payload: SalesTransactionReque
             invoice_number=tx.invoiceNumber,
         )
         tx = _save_sales_transaction(db, tx, new_line_payloads, payload, user)
+        refresh_customer_metrics_for_company(db, user.companyId)
     except Exception:
         db.rollback()
         raise
@@ -275,6 +278,7 @@ def delete_sales_transaction(transaction_id: int, db: DbDependency, authorizatio
     db.query(SalesTransactionLine).filter(SalesTransactionLine.transactionId == tx.id).delete()
     db.delete(tx)
     db.commit()
+    refresh_customer_metrics_for_company(db, user.companyId)
 
     create_audit_log(db, company=company.name, user=user.email,
                      action="Sale Deleted", entity_name=tx.invoiceNumber, invoice_number=tx.invoiceNumber,

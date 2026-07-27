@@ -25,6 +25,10 @@ type AnalyticsPayload = {
   topLowStockProducts: Array<{ name: string; stock: number; sku: string }>;
   outOfStockProductDetails: Array<{ name: string; sku: string; category: number | string }>;
   inventoryValueByCategory: Array<{ name: string; value: number }>;
+  topCustomersByRevenue: Array<{ name: string; revenue: number; orders: number }>;
+  recentCustomers: Array<{ id: number; name: string; email: string; status: string; purchaseCount: number; totalSpend: number }>;
+  customerGrowthTrend: Array<{ month: string; customers: number }>;
+  customerRevenueContribution: Array<{ name: string; value: number; share: number }>;
 };
 
 const currencyFormatter = new Intl.NumberFormat('en-IN', {
@@ -107,6 +111,10 @@ export default function DashboardSummaryPage() {
     topLowStockProducts: [],
     outOfStockProductDetails: [],
     inventoryValueByCategory: [],
+    topCustomersByRevenue: [],
+    recentCustomers: [],
+    customerGrowthTrend: [],
+    customerRevenueContribution: [],
   });
 
   const isCompanyAdmin = ['admin', 'company_admin', 'super_admin'].includes(normalizeRole(user?.role));
@@ -385,6 +393,60 @@ export default function DashboardSummaryPage() {
                         <Typography variant="body2" color="text.secondary">{currencyFormatter.format(entry.value)}</Typography>
                       </Box>
                     )) : <Typography color="text.secondary">No sales channel data yet for the current filters.</Typography>}
+                  </Box>
+                </Box>
+              </Box>
+            </Box>
+          </Card>
+
+          <Card className="dashboard-content__table-card">
+            <Typography className="dashboard-content__title dashboard-content__title--dark">Customer Analytics</Typography>
+            <Box sx={{ display: 'grid', gap: 2.5 }}>
+              <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' } }}>
+                <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
+                  <Typography variant="subtitle1" fontWeight={600}>Top Customers by Revenue</Typography>
+                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                    {analyticsSummary.topCustomersByRevenue.length ? analyticsSummary.topCustomersByRevenue.map((customer) => (
+                      <Box key={customer.name} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <Typography variant="body2">{customer.name}</Typography>
+                        <Typography variant="body2" color="text.secondary">{currencyFormatter.format(customer.revenue)}</Typography>
+                      </Box>
+                    )) : <Typography color="text.secondary">No customer revenue data yet for the current filters.</Typography>}
+                  </Box>
+                </Box>
+                <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
+                  <Typography variant="subtitle1" fontWeight={600}>Recent Customers</Typography>
+                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                    {analyticsSummary.recentCustomers.length ? analyticsSummary.recentCustomers.map((customer) => (
+                      <Box key={customer.id} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <Typography variant="body2">{customer.name}</Typography>
+                        <Typography variant="body2" color="text.secondary">{customer.purchaseCount} orders</Typography>
+                      </Box>
+                    )) : <Typography color="text.secondary">No recent customers yet for the current filters.</Typography>}
+                  </Box>
+                </Box>
+              </Box>
+              <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' } }}>
+                <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
+                  <Typography variant="subtitle1" fontWeight={600}>Customer Growth Trend</Typography>
+                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                    {analyticsSummary.customerGrowthTrend.length ? analyticsSummary.customerGrowthTrend.map((entry) => (
+                      <Box key={entry.month} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <Typography variant="body2">{entry.month}</Typography>
+                        <Typography variant="body2" color="text.secondary">{entry.customers} customers</Typography>
+                      </Box>
+                    )) : <Typography color="text.secondary">No customer growth data yet for the current filters.</Typography>}
+                  </Box>
+                </Box>
+                <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
+                  <Typography variant="subtitle1" fontWeight={600}>Revenue Contribution</Typography>
+                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                    {analyticsSummary.customerRevenueContribution.length ? analyticsSummary.customerRevenueContribution.map((entry) => (
+                      <Box key={entry.name} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <Typography variant="body2">{entry.name}</Typography>
+                        <Typography variant="body2" color="text.secondary">{entry.share.toFixed(1)}%</Typography>
+                      </Box>
+                    )) : <Typography color="text.secondary">No revenue contribution data yet for the current filters.</Typography>}
                   </Box>
                 </Box>
               </Box>

@@ -12,6 +12,7 @@ import NotificationsPage from './pages/admin/NotificationsPage.tsx';
 import CategoriesPage from './pages/admin/CategoriesPage.tsx';
 import ProductsPage from './pages/admin/ProductsPage.tsx';
 import ProductDetailsPage from './pages/admin/ProductDetailsPage.tsx';
+import CustomersPage from './pages/admin/CustomersPage.tsx';
 import InventoryPage from './pages/admin/InventoryPage.tsx';
 import AuditLogsPage from './pages/admin/AuditLogsPage.tsx';
 import { AuthProvider, useAuth } from './auth/AuthContext.tsx';
@@ -141,6 +142,14 @@ function AppRoutes() {
         element={
           <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
             <ProductDetailsPage />
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/customers"
+        element={
+          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
+            <CustomersPage />
           </RoleProtectedRoute>
         }
       />

@@ -100,6 +100,10 @@ class AnalyticsDashboardTests(unittest.TestCase):
         self.assertIn("topLowStockProducts", body)
         self.assertIn("outOfStockProducts", body)
         self.assertIn("inventoryValueByCategory", body)
+        self.assertIn("topCustomersByRevenue", body)
+        self.assertIn("recentCustomers", body)
+        self.assertIn("customerGrowthTrend", body)
+        self.assertIn("customerRevenueContribution", body)
 
     def test_analytics_dashboard_applies_filters(self):
         suffix = uuid.uuid4().hex[:8]

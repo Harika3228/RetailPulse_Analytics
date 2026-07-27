@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Float, Integer, String
+from sqlalchemy import Column, DateTime, Float, Integer, String, inspect, text
 
 from backend.database import Base, engine
 
@@ -27,6 +27,32 @@ class User(Base):
     status = Column(String, default="active")
     lastLogin = Column(DateTime, default=datetime.now(timezone.utc))
     createdAt = Column(DateTime, default=datetime.now(timezone.utc))
+
+
+class Customer(Base):
+    __tablename__ = "customers"
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    customerId = Column(String, index=True)
+    name = Column(String, index=True)
+    email = Column(String, index=True)
+    phone = Column(String)
+    dateOfBirth = Column(String)
+    gender = Column(String)
+    address = Column(String)
+    city = Column(String)
+    state = Column(String)
+    country = Column(String)
+    customerType = Column(String, default="retail")
+    preferredSalesChannel = Column(String, default="offline")
+    status = Column(String, default="active")
+    segment = Column(String, default="new_customer")
+    totalSpend = Column(Float, default=0)
+    purchaseCount = Column(Integer, default=0)
+    firstPurchaseDate = Column(DateTime)
+    lastPurchaseDate = Column(DateTime)
+    createdAt = Column(DateTime, default=datetime.now(timezone.utc))
+    updatedAt = Column(DateTime, default=datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class RefreshToken(Base):
@@ -147,3 +173,20 @@ class StockAdjustment(Base):
 
 
 Base.metadata.create_all(bind=engine)
+
+
+def ensure_customer_schema() -> None:
+    inspector = inspect(engine)
+    if "customers" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("customers")}
+    if "customerId" not in columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE customers ADD COLUMN customerId VARCHAR"))
+
+    with engine.begin() as connection:
+        connection.execute(text("UPDATE customers SET customerId = 'CUST-' || id WHERE customerId IS NULL OR customerId = ''"))
+
+
+ensure_customer_schema()

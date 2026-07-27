@@ -21,6 +21,9 @@ function getSectionFromPath(pathname) {
   if (pathname.startsWith('/products')) {
     return 'Products';
   }
+  if (pathname.startsWith('/customers')) {
+    return 'Customers';
+  }
   if (pathname === '/audit-logs') {
     return 'Audit Logs';
   }
