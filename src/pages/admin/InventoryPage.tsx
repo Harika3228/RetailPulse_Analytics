@@ -51,6 +51,8 @@ export default function InventoryPage() {
   const [inventoryCategoryFilter, setInventoryCategoryFilter] = useState('all');
   const [inventoryBrandFilter, setInventoryBrandFilter] = useState('all');
   const [inventoryStatusFilter, setInventoryStatusFilter] = useState('all');
+  const [inventoryProductFilter, setInventoryProductFilter] = useState('');
+  const [inventoryForecastPeriod, setInventoryForecastPeriod] = useState('30d');
   const [inventorySortBy, setInventorySortBy] = useState('product_name');
   const [inventorySortDirection, setInventorySortDirection] = useState('asc');
   const [selectedInventoryItem, setSelectedInventoryItem] = useState<Record<string, any> | null>(null);
@@ -156,6 +158,12 @@ export default function InventoryPage() {
     if (inventoryStatusFilter !== 'all') {
       params.set('status_filter', inventoryStatusFilter);
     }
+    if (inventoryProductFilter.trim()) {
+      params.set('product', inventoryProductFilter.trim());
+    }
+    if (inventoryForecastPeriod) {
+      params.set('forecast_period', inventoryForecastPeriod);
+    }
     params.set('sort_by', inventorySortBy);
     params.set('sort_direction', inventorySortDirection);
 
@@ -167,7 +175,7 @@ export default function InventoryPage() {
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to load inventory');
     }
-  }, [inventoryBrandFilter, inventoryCategoryFilter, inventoryQuery, inventorySortBy, inventorySortDirection, inventoryStatusFilter, token]);
+  }, [inventoryBrandFilter, inventoryCategoryFilter, inventoryForecastPeriod, inventoryProductFilter, inventoryQuery, inventorySortBy, inventorySortDirection, inventoryStatusFilter, token]);
 
   useEffect(() => {
     loadCategories();
@@ -370,6 +378,24 @@ export default function InventoryPage() {
             <MenuItem value="out_of_stock">Out of Stock</MenuItem>
           </TextField>
           <TextField
+            value={inventoryProductFilter}
+            size="small"
+            className="dashboard-content__filter-select"
+            placeholder="Product filter"
+            onChange={(event) => setInventoryProductFilter(event.target.value)}
+          />
+          <TextField
+            select
+            size="small"
+            className="dashboard-content__filter-select"
+            value={inventoryForecastPeriod}
+            onChange={(event) => setInventoryForecastPeriod(event.target.value)}
+          >
+            <MenuItem value="7d">Forecast: 7d</MenuItem>
+            <MenuItem value="30d">Forecast: 30d</MenuItem>
+            <MenuItem value="90d">Forecast: 90d</MenuItem>
+          </TextField>
+          <TextField
             select
             size="small"
             className="dashboard-content__filter-select"
@@ -378,6 +404,10 @@ export default function InventoryPage() {
           >
             <MenuItem value="product_name">Sort: Name</MenuItem>
             <MenuItem value="current_stock">Sort: Current Stock</MenuItem>
+            <MenuItem value="highest_predicted_demand">Sort: Highest Predicted Demand</MenuItem>
+            <MenuItem value="lowest_stock">Sort: Lowest Stock</MenuItem>
+            <MenuItem value="highest_growth">Sort: Highest Growth</MenuItem>
+            <MenuItem value="forecast_accuracy">Sort: Forecast Accuracy</MenuItem>
             <MenuItem value="recently_updated">Sort: Recently Updated</MenuItem>
           </TextField>
           <TextField
@@ -407,6 +437,8 @@ export default function InventoryPage() {
                 <TableCell>Reserved</TableCell>
                 <TableCell>Available</TableCell>
                 <TableCell>Reorder Level</TableCell>
+                <TableCell>Recommendation</TableCell>
+                <TableCell>Predicted Demand</TableCell>
                 <TableCell>Status</TableCell>
                 <TableCell>Actions</TableCell>
               </TableRow>
@@ -422,6 +454,10 @@ export default function InventoryPage() {
                   <TableCell>{item.reservedStock}</TableCell>
                   <TableCell>{item.availableStock}</TableCell>
                   <TableCell>{item.reorderLevel}</TableCell>
+                  <TableCell>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>{item.recommendation || 'Stock Level Healthy'}</Typography>
+                  </TableCell>
+                  <TableCell>{item.predictedDemand ?? 0}</TableCell>
                   <TableCell>
                     <Chip label={stockStatusLabel(item.stockStatus)} color={stockStatusColor(item.stockStatus)} size="small" />
                   </TableCell>

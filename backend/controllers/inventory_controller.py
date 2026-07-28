@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
@@ -18,6 +19,30 @@ def _extract_token(authorization: str | None) -> str:
     return authorization.split(" ", 1)[1]
 
 
+def _resolve_forecast_period(period: str | None) -> tuple[str, int]:
+    if period in {"7d", "next_7_days", "7-days"}:
+        return "Next 7 Days", 7
+    if period in {"30d", "next_30_days", "30-days"}:
+        return "Next 30 Days", 30
+    if period in {"90d", "next_90_days", "90-days"}:
+        return "Next 90 Days", 90
+    return "Next 30 Days", 30
+
+
+def _build_recommendation(current_stock: int, reorder_level: int, historical_sales: float, predicted_demand: float) -> str:
+    if current_stock <= 0:
+        return "Immediate Restock Required"
+    if current_stock <= max(1, reorder_level):
+        return "Reorder Soon"
+    if predicted_demand > historical_sales * 1.2 and current_stock < reorder_level * 2:
+        return "Reorder Soon"
+    if current_stock >= reorder_level * 2 and predicted_demand <= historical_sales * 1.05:
+        return "Stock Level Healthy"
+    if current_stock > reorder_level * 3:
+        return "Overstock Risk"
+    return "Stock Level Healthy"
+
+
 def list_inventory(
     db: DbDependency,
     q: str | None = None,
@@ -27,6 +52,8 @@ def list_inventory(
     authorization: str | None = None,
     sort_by: str | None = None,
     sort_direction: str | None = None,
+    product: str | None = None,
+    forecast_period: str | None = None,
 ) -> list[InventoryResponse]:
     token = _extract_token(authorization)
     user = get_current_user(db, token)
@@ -38,6 +65,9 @@ def list_inventory(
         query = query.filter(
             Product.name.ilike(wildcard) | Product.sku.ilike(wildcard) | Product.brand.ilike(wildcard)
         )
+    if product:
+        wildcard = f"%{product}%"
+        query = query.filter(Product.name.ilike(wildcard) | Product.sku.ilike(wildcard))
     if categoryId:
         query = query.filter(Product.categoryId == categoryId)
     if brand:
@@ -48,17 +78,23 @@ def list_inventory(
 
     normalized_sort_by = (sort_by or "product_name").strip().lower()
     normalized_sort_direction = (sort_direction or "asc").strip().lower()
-    if normalized_sort_by == "current_stock":
-        sort_expression = func.coalesce(Product.stockQuantity, Product.initialStockQuantity, 0)
-    elif normalized_sort_by == "recently_updated":
-        sort_expression = Product.updatedAt
-    else:
-        sort_expression = Product.name
 
-    if normalized_sort_direction == "desc":
-        query = query.order_by(desc(sort_expression))
-    else:
-        query = query.order_by(asc(sort_expression))
+    forecast_label, _ = _resolve_forecast_period(forecast_period)
+
+    transactions = (
+        db.query(SalesTransaction)
+        .filter(SalesTransaction.companyId == user.companyId)
+        .order_by(SalesTransaction.saleDateTime.asc())
+        .all()
+    )
+    sales_lines = (
+        db.query(SalesTransactionLine)
+        .filter(SalesTransactionLine.transactionId.in_([transaction.id for transaction in transactions]))
+        .all()
+    )
+    lines_by_product: dict[int, list[SalesTransactionLine]] = defaultdict(list)
+    for line in sales_lines:
+        lines_by_product[line.productId].append(line)
 
     items: list[InventoryResponse] = []
     for product in query.all():
@@ -76,6 +112,30 @@ def list_inventory(
         initial_stock = int(product.initialStockQuantity if product.initialStockQuantity is not None else current_stock)
         reserved_stock = max(0, initial_stock - current_stock)
         available_stock = max(0, current_stock - reserved_stock)
+        reorder_level = max(0, int(initial_stock * 0.25))
+        product_lines = lines_by_product.get(product.id, [])
+        monthly_history: list[tuple[str, float]] = []
+        for transaction in transactions:
+            month = transaction.saleDateTime.strftime("%Y-%m") if transaction.saleDateTime else None
+            if not month:
+                continue
+            matching_quantity = sum(line.quantity or 0 for line in product_lines if line.transactionId == transaction.id)
+            monthly_history.append((month, float(matching_quantity)))
+        history_by_month: dict[str, float] = defaultdict(float)
+        for month, value in monthly_history:
+            history_by_month[month] += value
+        ordered_history = [(month, history_by_month[month]) for month in sorted(history_by_month.keys())[-6:]]
+        historical_sales = sum(item[1] for item in ordered_history)
+        if ordered_history:
+            recent_values = [value for _, value in ordered_history[-3:]]
+            trend = sum(recent_values[i + 1] - recent_values[i] for i in range(len(recent_values) - 1)) / max(1, len(recent_values) - 1)
+            predicted_demand = max(0.0, float(ordered_history[-1][1] + trend))
+            growth_rate = round(((predicted_demand - historical_sales) / max(abs(historical_sales), 1.0)) * 100, 2) if historical_sales else 0.0
+            forecast_accuracy = round(max(0.0, min(100.0, 100 - abs(predicted_demand - historical_sales) / max(abs(historical_sales), 1.0) * 100)), 2) if historical_sales else 100.0
+        else:
+            predicted_demand = 0.0
+            growth_rate = 0.0
+            forecast_accuracy = 100.0
         normalized_status = (product.status or "active").lower()
         if available_stock <= 0:
             stock_status = "out_of_stock"
@@ -88,6 +148,49 @@ def list_inventory(
             normalized_status = "active"
         product.status = normalized_status
 
+        recommendation = _build_recommendation(current_stock, reorder_level, historical_sales, predicted_demand)
+        latest_history_value = ordered_history[-1][1] if ordered_history else 0.0
+        if available_stock <= 0:
+            create_notification(
+                db,
+                user.companyId,
+                product.id,
+                product.name,
+                f"{product.name} is predicted to run out of stock.",
+                "forecast_out_of_stock",
+            )
+        elif predicted_demand > current_stock:
+            create_notification(
+                db,
+                user.companyId,
+                product.id,
+                product.name,
+                f"{product.name} forecasted demand exceeds available inventory.",
+                "forecast_demand_exceeds_inventory",
+            )
+        elif predicted_demand > latest_history_value * 1.1:
+            create_notification(
+                db,
+                user.companyId,
+                product.id,
+                product.name,
+                f"{product.name} shows significant demand growth.",
+                "demand_growth_alert",
+            )
+
+        create_audit_log(
+            db,
+            company=str(user.companyId),
+            user=user.email,
+            action="Inventory Recommendation Generated",
+            entity_name=product.name,
+            product_name=product.name,
+            category_name=category_name,
+            forecast_period=forecast_label,
+            ip_address="Unknown",
+            browser="Unknown",
+        )
+
         items.append(
             InventoryResponse(
                 productId=product.id,
@@ -99,12 +202,34 @@ def list_inventory(
                 currentStock=current_stock,
                 reservedStock=reserved_stock,
                 availableStock=available_stock,
-                reorderLevel=max(0, int(initial_stock * 0.25)),
+                reorderLevel=reorder_level,
                 stockStatus=stock_status,
                 status=normalized_status,
+                recommendation=recommendation,
+                predictedDemand=round(predicted_demand, 2),
+                growthRate=round(growth_rate, 2),
+                forecastAccuracy=round(forecast_accuracy, 2),
+                forecastPeriod=forecast_label,
                 updatedAt=product.updatedAt.isoformat() if product.updatedAt else None,
             )
         )
+
+    def sort_key(item: InventoryResponse):
+        if normalized_sort_by == "current_stock":
+            return item.currentStock
+        if normalized_sort_by == "recently_updated":
+            return item.updatedAt or ""
+        if normalized_sort_by == "highest_predicted_demand":
+            return item.predictedDemand
+        if normalized_sort_by == "lowest_stock":
+            return item.currentStock
+        if normalized_sort_by == "highest_growth":
+            return item.growthRate
+        if normalized_sort_by == "forecast_accuracy":
+            return item.forecastAccuracy
+        return item.productName.lower()
+
+    items.sort(key=sort_key, reverse=normalized_sort_direction == "desc")
 
     create_audit_log(
         db,

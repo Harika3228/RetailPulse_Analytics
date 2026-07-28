@@ -1,4 +1,4 @@
-export const sidebarItems = ['Dashboard', 'Inventory', 'Categories', 'Products', 'Customers', 'Sales', 'Reports', 'Notifications', 'Audit Logs', 'Settings'];
+export const sidebarItems = ['Dashboard', 'Inventory', 'Categories', 'Products', 'Customers', 'Sales', 'Forecasting', 'Reports', 'Notifications', 'Audit Logs', 'Settings'];
 export const adminOnlyItems = new Set(['Categories', 'Products', 'Customers', 'Audit Logs']);
 
 export const sidebarRouteMap = {
@@ -8,6 +8,7 @@ export const sidebarRouteMap = {
   Products: '/products',
   Customers: '/customers',
   Sales: '/sales',
+  Forecasting: '/forecasting',
   Reports: '/dashboard',
   Notifications: '/notifications',
   Settings: '/dashboard',

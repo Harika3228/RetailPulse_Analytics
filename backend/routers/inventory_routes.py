@@ -21,9 +21,11 @@ def list_inventory_route(
     status_filter: str | None = None,
     sort_by: str | None = None,
     sort_direction: str | None = None,
+    product: str | None = None,
+    forecast_period: str | None = None,
     authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    return list_inventory(db, q, categoryId, brand, status_filter, authorization, sort_by, sort_direction)
+    return list_inventory(db, q, categoryId, brand, status_filter, authorization, sort_by, sort_direction, product, forecast_period)
 
 
 @router.get("/inventory/{product_id}/movements", response_model=list[InventoryMovementResponse])

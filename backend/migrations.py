@@ -150,6 +150,10 @@ def ensure_schema() -> None:
             connection.execute(text("ALTER TABLE audit_logs ADD COLUMN invoiceNumber VARCHAR"))
         if "productName" not in audit_columns:
             connection.execute(text("ALTER TABLE audit_logs ADD COLUMN productName VARCHAR"))
+        if "categoryName" not in audit_columns:
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN categoryName VARCHAR"))
+        if "forecastPeriod" not in audit_columns:
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN forecastPeriod VARCHAR"))
         if "user" not in audit_columns:
             connection.execute(text("ALTER TABLE audit_logs ADD COLUMN user VARCHAR"))
         if "action" not in audit_columns:

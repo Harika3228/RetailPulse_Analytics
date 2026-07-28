@@ -15,6 +15,7 @@ import ProductDetailsPage from './pages/admin/ProductDetailsPage.tsx';
 import CustomersPage from './pages/admin/CustomersPage.tsx';
 import InventoryPage from './pages/admin/InventoryPage.tsx';
 import AuditLogsPage from './pages/admin/AuditLogsPage.tsx';
+import ForecastingPage from './pages/admin/ForecastingPage.tsx';
 import { AuthProvider, useAuth } from './auth/AuthContext.tsx';
 
 const theme = createTheme({
@@ -150,6 +151,14 @@ function AppRoutes() {
         element={
           <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
             <CustomersPage />
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/forecasting"
+        element={
+          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+            <ForecastingPage />
           </RoleProtectedRoute>
         }
       />

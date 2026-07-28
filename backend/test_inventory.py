@@ -105,6 +105,36 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(inventory_body[0]["currentStock"], 25)
         self.assertEqual(inventory_body[0]["productName"], "Inventory Product " + f"{suffix}-b")
 
+    def test_inventory_recommendations_and_forecast_filters_are_supported(self):
+        suffix = uuid.uuid4().hex[:8]
+        register_payload = {
+            "companyName": f"Forecast Co {suffix}",
+            "industry": "Retail",
+            "companyEmail": f"forecast-{suffix}@example.com",
+            "companyAddress": "1 Forecast Way",
+            "companyPhone": "555-2006",
+            "ownerName": f"Owner {suffix}",
+            "ownerEmail": f"owner-forecast-{suffix}@example.com",
+            "password": "Password123",
+            "confirmPassword": "Password123",
+        }
+        register_response = self.client.post("/auth/register", json=register_payload)
+        self.assertEqual(register_response.status_code, 200)
+        token = register_response.json()["access_token"]
+        self._create_test_product(token, suffix, stock=2)
+
+        inventory_response = self.client.get(
+            "/inventory?product=Inventory+Product&forecast_period=30d&sort_by=highest_predicted_demand&sort_direction=desc",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(inventory_response.status_code, 200)
+        inventory_body = inventory_response.json()
+        self.assertTrue(len(inventory_body) >= 1)
+        inventory_item = inventory_body[0]
+        self.assertIn(inventory_item["recommendation"], {"Reorder Soon", "Immediate Restock Required", "Stock Level Healthy", "Overstock Risk"})
+        self.assertGreaterEqual(inventory_item["predictedDemand"], 0)
+        self.assertEqual(inventory_item["forecastPeriod"], "Next 30 Days")
+
     def test_invalid_adjustments_are_rejected(self):
         suffix = uuid.uuid4().hex[:8]
         register_payload = {

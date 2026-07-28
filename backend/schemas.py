@@ -378,6 +378,11 @@ class InventoryResponse(BaseModel):
     reorderLevel: int
     stockStatus: str
     status: str
+    recommendation: str = "Stock Level Healthy"
+    predictedDemand: float = 0.0
+    growthRate: float = 0.0
+    forecastAccuracy: float = 0.0
+    forecastPeriod: str = "Next 30 Days"
     updatedAt: str | None = None
 
 
@@ -530,3 +535,45 @@ class SalesTransactionResponse(BaseModel):
     createdAt: str
     updatedAt: str | None = None
     lines: list[SalesLineResponse]
+
+
+class ForecastPoint(BaseModel):
+    month: str
+    historical: float
+    forecast: float
+
+
+class ForecastSummaryResponse(BaseModel):
+    totalProducts: int
+    forecastedDemand: float
+    averageMonthlySales: float
+    trendGrowth: float
+    forecastPeriod: str = "Next 30 Days"
+    forecastWindowDays: int = 30
+    forecastPoints: list[ForecastPoint] = Field(default_factory=list)
+
+
+class ForecastProductResponse(BaseModel):
+    id: int
+    name: str
+    categoryName: str
+    currentStock: int
+    historicalDemand: float
+    forecastedDemand: float
+    forecastPeriod: str = "Next 30 Days"
+    confidenceLevel: float
+    forecastPoints: list[ForecastPoint] = Field(default_factory=list)
+
+
+class ForecastCategoryResponse(BaseModel):
+    name: str
+    totalHistoricalSales: float
+    predictedDemand: float
+    expectedGrowthPercentage: float
+    forecastPoints: list[ForecastPoint] = Field(default_factory=list)
+
+
+class ForecastAccuracyResponse(BaseModel):
+    accuracy: float
+    totalObservations: int
+    bias: float

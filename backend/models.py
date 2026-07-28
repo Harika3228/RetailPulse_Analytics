@@ -71,6 +71,8 @@ class AuditLog(Base):
     entityName = Column(String)
     invoiceNumber = Column(String, index=True)
     productName = Column(String)
+    categoryName = Column(String)
+    forecastPeriod = Column(String)
     user = Column(String)
     action = Column(String)
     ipAddress = Column(String)
@@ -118,6 +120,28 @@ class Notification(Base):
     message = Column(String)
     type = Column(String, index=True)
     isRead = Column(Integer, default=0)
+    createdAt = Column(DateTime, default=datetime.now(timezone.utc))
+
+
+class DemandForecast(Base):
+    __tablename__ = "demand_forecasts"
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    productId = Column(Integer, index=True)
+    categoryId = Column(Integer, index=True)
+    forecastPeriod = Column(String, index=True)
+    predictedDemand = Column(Float, default=0)
+    confidenceScore = Column(Float, default=0)
+    generatedAt = Column(DateTime, default=datetime.now(timezone.utc))
+
+
+class ForecastHistory(Base):
+    __tablename__ = "forecast_history"
+    id = Column(Integer, primary_key=True, index=True)
+    forecastId = Column(Integer, index=True)
+    historicalSales = Column(Float, default=0)
+    prediction = Column(Float, default=0)
+    accuracy = Column(Float, default=0)
     createdAt = Column(DateTime, default=datetime.now(timezone.utc))
 
 
@@ -170,6 +194,16 @@ class StockAdjustment(Base):
     adjustedByUserId = Column(Integer, nullable=True)
     adjustmentDate = Column(DateTime, default=datetime.now(timezone.utc))
     createdAt = Column(DateTime, default=datetime.now(timezone.utc))
+
+
+class ForecastSnapshot(Base):
+    __tablename__ = "forecast_snapshots"
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    forecastType = Column(String, index=True)
+    period = Column(String, default="30d")
+    generatedAt = Column(DateTime, default=datetime.now(timezone.utc))
+    payload = Column(String)
 
 
 Base.metadata.create_all(bind=engine)
