@@ -128,14 +128,14 @@ class CustomerModuleTests(unittest.TestCase):
             json={**base_payload, "name": f"Grace Duplicate {unique_suffix}", "email": base_payload["email"]},
             headers=headers,
         )
-        self.assertEqual(duplicate_email_response.status_code, 400)
+        self.assertEqual(duplicate_email_response.status_code, 409)
 
         duplicate_phone_response = self.client.post(
             "/customers",
             json={**base_payload, "name": f"Grace Phone {unique_suffix}", "email": f"grace-phone-{unique_suffix}@example.com", "phone": base_payload["phone"]},
             headers=headers,
         )
-        self.assertEqual(duplicate_phone_response.status_code, 400)
+        self.assertEqual(duplicate_phone_response.status_code, 409)
 
     def test_customer_lifecycle_notifications_are_visible_to_admins(self):
         login_response = self.client.post(

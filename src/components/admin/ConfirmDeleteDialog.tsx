@@ -11,7 +11,7 @@ type ConfirmDeleteDialogProps = {
 
 export default function ConfirmDeleteDialog({ open, title, description, entityName, onCancel, onConfirm }: ConfirmDeleteDialogProps) {
   return (
-    <Dialog open={open} onClose={onCancel} maxWidth="xs" fullWidth>
+    <Dialog open={open} onClose={onCancel} maxWidth="xs" fullWidth closeAfterTransition={false}>
       <DialogTitle>{title}</DialogTitle>
       <DialogContent>
         {description ? <Typography>{description}</Typography> : null}

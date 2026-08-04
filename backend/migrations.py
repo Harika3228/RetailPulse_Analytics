@@ -194,6 +194,10 @@ def ensure_schema() -> None:
             connection.execute(text("ALTER TABLE customers ADD COLUMN firstPurchaseDate DATETIME"))
         if "segment" not in customer_columns:
             connection.execute(text("ALTER TABLE customers ADD COLUMN segment VARCHAR DEFAULT 'new_customer'"))
+        if "postalCode" not in customer_columns:
+            connection.execute(text("ALTER TABLE customers ADD COLUMN postalCode VARCHAR"))
+        if "isDeleted" not in customer_columns:
+            connection.execute(text("ALTER TABLE customers ADD COLUMN isDeleted INTEGER DEFAULT 0"))
 
         # sales
         if "invoiceNumber" not in sales_tx_columns:

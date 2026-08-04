@@ -279,6 +279,7 @@ def _to_customer_response(customer: Customer, db: DbDependency | None = None) ->
         city=customer.city,
         state=customer.state,
         country=customer.country,
+        postalCode=customer.postalCode,
         customerType=customer.customerType,
         preferredSalesChannel=customer.preferredSalesChannel,
         status=customer.status or "active",
@@ -306,6 +307,7 @@ def list_customers(
     db: DbDependency,
     q: str | None = None,
     status_filter: str | None = None,
+    segment: str | None = None,
     customer_type: str | None = None,
     sales_channel: str | None = None,
     city: str | None = None,
@@ -321,7 +323,7 @@ def list_customers(
     user = get_current_user(db, token)
     _ensure_admin(user)
 
-    query = db.query(Customer).filter(Customer.companyId == user.companyId)
+    query = db.query(Customer).filter(Customer.companyId == user.companyId, Customer.isDeleted != 1)
     if q:
         wildcard = f"%{q.strip()}%"
         query = query.filter(
@@ -334,6 +336,8 @@ def list_customers(
             query = query.filter(Customer.id == int(q.strip()))
     if status_filter:
         query = query.filter(Customer.status == status_filter.lower())
+    if segment:
+        query = query.filter(Customer.segment == segment.lower())
     if customer_type:
         query = query.filter(Customer.customerType == customer_type.lower())
     if sales_channel:
@@ -393,13 +397,20 @@ def create_customer(payload: CustomerRequest, db: DbDependency, authorization: s
     _ensure_admin(user)
     company = get_company_for_user(db, user)
 
+    if not payload.name or not payload.name.strip():
+        raise HTTPException(status_code=400, detail="First Name is required.")
+    if not payload.email or not payload.email.strip():
+        raise HTTPException(status_code=400, detail="Email is required.")
+    if not payload.phone or not payload.phone.strip():
+        raise HTTPException(status_code=400, detail="Phone number is required.")
+
     normalized_email = _normalize_email(payload.email)
     normalized_phone = _normalize_phone(payload.phone)
-    existing_customers = db.query(Customer).filter(Customer.companyId == user.companyId).all()
+    existing_customers = db.query(Customer).filter(Customer.companyId == user.companyId, Customer.isDeleted != 1).all()
     if any(_normalize_email(item.email) == normalized_email for item in existing_customers if item.email):
-        raise HTTPException(status_code=400, detail="Customer email already exists")
+        raise HTTPException(status_code=409, detail="Email already exists.")
     if normalized_phone and any(_normalize_phone(item.phone) == normalized_phone for item in existing_customers if item.phone):
-        raise HTTPException(status_code=400, detail="Customer phone already exists")
+        raise HTTPException(status_code=409, detail="Phone number already exists.")
 
     customer = Customer(
         companyId=user.companyId,
@@ -413,6 +424,7 @@ def create_customer(payload: CustomerRequest, db: DbDependency, authorization: s
         city=payload.city.strip() if payload.city else None,
         state=payload.state.strip() if payload.state else None,
         country=payload.country.strip() if payload.country else None,
+        postalCode=payload.postalCode.strip() if payload.postalCode else None,
         customerType=(payload.customerType or "retail").strip().lower(),
         preferredSalesChannel=(payload.preferredSalesChannel or "offline").strip().lower(),
         status=(payload.status or "active").strip().lower(),
@@ -439,7 +451,7 @@ def get_customer(customer_id: int, db: DbDependency, authorization: str | None =
     user = get_current_user(db, token)
     _ensure_admin(user)
 
-    customer = db.query(Customer).filter(Customer.id == customer_id, Customer.companyId == user.companyId).first()
+    customer = db.query(Customer).filter(Customer.id == customer_id, Customer.companyId == user.companyId, Customer.isDeleted != 1).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     return _to_customer_response(customer, db)
@@ -451,17 +463,24 @@ def update_customer(customer_id: int, payload: CustomerRequest, db: DbDependency
     _ensure_admin(user)
     company = get_company_for_user(db, user)
 
-    customer = db.query(Customer).filter(Customer.id == customer_id, Customer.companyId == user.companyId).first()
+    customer = db.query(Customer).filter(Customer.id == customer_id, Customer.companyId == user.companyId, Customer.isDeleted != 1).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
 
+    if not payload.name or not payload.name.strip():
+        raise HTTPException(status_code=400, detail="First Name is required.")
+    if not payload.email or not payload.email.strip():
+        raise HTTPException(status_code=400, detail="Email is required.")
+    if not payload.phone or not payload.phone.strip():
+        raise HTTPException(status_code=400, detail="Phone number is required.")
+
     normalized_email = _normalize_email(payload.email)
     normalized_phone = _normalize_phone(payload.phone)
-    existing_customers = db.query(Customer).filter(Customer.companyId == user.companyId).all()
+    existing_customers = db.query(Customer).filter(Customer.companyId == user.companyId, Customer.isDeleted != 1).all()
     if any(item.id != customer_id and _normalize_email(item.email) == normalized_email for item in existing_customers if item.email):
-        raise HTTPException(status_code=400, detail="Customer email already exists")
+        raise HTTPException(status_code=409, detail="Email already exists.")
     if normalized_phone and any(item.id != customer_id and _normalize_phone(item.phone) == normalized_phone for item in existing_customers if item.phone):
-        raise HTTPException(status_code=400, detail="Customer phone already exists")
+        raise HTTPException(status_code=409, detail="Phone number already exists.")
 
     customer.name = payload.name.strip() if payload.name else (customer.name or "Unknown Customer")
     customer.email = normalized_email
@@ -472,6 +491,7 @@ def update_customer(customer_id: int, payload: CustomerRequest, db: DbDependency
     customer.city = payload.city.strip() if payload.city else None
     customer.state = payload.state.strip() if payload.state else None
     customer.country = payload.country.strip() if payload.country else None
+    customer.postalCode = payload.postalCode.strip() if payload.postalCode else None
     customer.customerType = (payload.customerType or customer.customerType or "retail").strip().lower()
     customer.preferredSalesChannel = (payload.preferredSalesChannel or customer.preferredSalesChannel or "offline").strip().lower()
     customer.status = (payload.status or customer.status or "active").strip().lower()
@@ -492,7 +512,7 @@ def update_customer_status(customer_id: int, payload: CustomerStatusRequest, db:
     if normalized not in {"active", "inactive"}:
         raise HTTPException(status_code=400, detail="Status must be 'active' or 'inactive'")
 
-    customer = db.query(Customer).filter(Customer.id == customer_id, Customer.companyId == user.companyId).first()
+    customer = db.query(Customer).filter(Customer.id == customer_id, Customer.companyId == user.companyId, Customer.isDeleted != 1).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
 
@@ -521,7 +541,7 @@ def get_customer_analytics(db: DbDependency, authorization: str | None = None) -
     user = get_current_user(db, token)
     _ensure_admin(user)
 
-    customers = db.query(Customer).filter(Customer.companyId == user.companyId).all()
+    customers = db.query(Customer).filter(Customer.companyId == user.companyId, Customer.isDeleted != 1).all()
     total_customers = len(customers)
     active_customers = sum(1 for item in customers if (item.status or "active").lower() == "active")
     inactive_customers = total_customers - active_customers
@@ -644,7 +664,7 @@ def export_customers(
     user = get_current_user(db, token)
     _ensure_sales_user(user)
 
-    customers = db.query(Customer).filter(Customer.companyId == user.companyId).order_by(desc(Customer.createdAt), desc(Customer.id)).all()
+    customers = db.query(Customer).filter(Customer.companyId == user.companyId, Customer.isDeleted != 1).order_by(desc(Customer.createdAt), desc(Customer.id)).all()
     analytics = get_customer_analytics(db, authorization)
     _log_customer_audit(db, str(user.companyId), user.email, "Customer Exported")
 
@@ -759,12 +779,13 @@ def delete_customer(customer_id: int, db: DbDependency, authorization: str | Non
     _ensure_admin(user)
     company = get_company_for_user(db, user)
 
-    customer = db.query(Customer).filter(Customer.id == customer_id, Customer.companyId == user.companyId).first()
+    customer = db.query(Customer).filter(Customer.id == customer_id, Customer.companyId == user.companyId, Customer.isDeleted != 1).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
 
     customer_name = customer.name or "Customer"
-    db.delete(customer)
+    customer.isDeleted = 1
+    customer.updatedAt = datetime.now(timezone.utc)
     db.commit()
     _log_customer_audit(db, company.name, user.email, "Customer Deleted", customer_name)
     return {"message": "Customer deleted", "id": customer_id}
@@ -775,7 +796,7 @@ def get_customer_timeline(customer_id: int, db: DbDependency, authorization: str
     user = get_current_user(db, token)
     _ensure_admin(user)
 
-    customer = db.query(Customer).filter(Customer.id == customer_id, Customer.companyId == user.companyId).first()
+    customer = db.query(Customer).filter(Customer.id == customer_id, Customer.companyId == user.companyId, Customer.isDeleted != 1).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
 
@@ -787,7 +808,7 @@ def get_customer_purchase_history(customer_id: int, db: DbDependency, authorizat
     user = get_current_user(db, token)
     _ensure_admin(user)
 
-    customer = db.query(Customer).filter(Customer.id == customer_id, Customer.companyId == user.companyId).first()
+    customer = db.query(Customer).filter(Customer.id == customer_id, Customer.companyId == user.companyId, Customer.isDeleted != 1).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
 

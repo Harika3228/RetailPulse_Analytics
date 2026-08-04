@@ -44,7 +44,7 @@ export default function SaleDialog({
   };
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="md" closeAfterTransition={false}>
       <DialogTitle>{editingTransactionId ? 'Edit Sale' : 'Create Sale'}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} mt={1}>

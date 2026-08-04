@@ -25,7 +25,7 @@ export default function ProductDialog({
   onSubmit,
 }) {
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="md" closeAfterTransition={false}>
       <DialogTitle>{editingProductId ? 'Edit Product' : 'Add Product'}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} mt={1}>

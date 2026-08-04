@@ -22,7 +22,7 @@ export default function CategoryDialog({
   onSubmit,
 }) {
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" closeAfterTransition={false}>
       <DialogTitle>{editingCategoryId ? 'Edit Category' : 'Create Category'}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} mt={1}>

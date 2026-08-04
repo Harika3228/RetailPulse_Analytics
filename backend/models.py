@@ -43,6 +43,7 @@ class Customer(Base):
     city = Column(String)
     state = Column(String)
     country = Column(String)
+    postalCode = Column(String)
     customerType = Column(String, default="retail")
     preferredSalesChannel = Column(String, default="offline")
     status = Column(String, default="active")
@@ -51,6 +52,7 @@ class Customer(Base):
     purchaseCount = Column(Integer, default=0)
     firstPurchaseDate = Column(DateTime)
     lastPurchaseDate = Column(DateTime)
+    isDeleted = Column(Integer, default=0)
     createdAt = Column(DateTime, default=datetime.now(timezone.utc))
     updatedAt = Column(DateTime, default=datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

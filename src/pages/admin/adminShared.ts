@@ -57,7 +57,11 @@ export async function apiRequest(path: string, token: string, init: RequestInit 
         try {
           const payload = await response.json();
           if (payload?.detail) {
-            message = payload.detail;
+            if (Array.isArray(payload.detail)) {
+              message = payload.detail.map((err) => err.msg).join('; ');
+            } else {
+              message = String(payload.detail);
+            }
           }
         } catch {
           // Ignore malformed error payloads.

@@ -158,6 +158,7 @@ class CustomerRequest(BaseModel):
     city: str | None = None
     state: str | None = None
     country: str | None = None
+    postalCode: str | None = None
     customerType: str | None = None
     preferredSalesChannel: str | None = None
     status: str | None = "active"
@@ -174,14 +175,21 @@ class CustomerRequest(BaseModel):
     def validate_email(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return value.strip()
+        stripped = value.strip()
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', stripped):
+            raise ValueError("Invalid email format")
+        return stripped
 
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return value.strip()
+        stripped = value.strip()
+        digits = re.sub(r"\D", "", stripped)
+        if len(digits) < 10:
+            raise ValueError("Phone number must have at least 10 digits")
+        return stripped
 
 
 class CustomerResponse(BaseModel):
@@ -196,6 +204,7 @@ class CustomerResponse(BaseModel):
     city: str | None = None
     state: str | None = None
     country: str | None = None
+    postalCode: str | None = None
     customerType: str | None = None
     preferredSalesChannel: str | None = None
     status: str

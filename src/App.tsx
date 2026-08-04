@@ -13,6 +13,7 @@ import CategoriesPage from './pages/admin/CategoriesPage.tsx';
 import ProductsPage from './pages/admin/ProductsPage.tsx';
 import ProductDetailsPage from './pages/admin/ProductDetailsPage.tsx';
 import CustomersPage from './pages/admin/CustomersPage.tsx';
+import CustomerDetailsPage from './pages/admin/CustomerDetailsPage.tsx';
 import InventoryPage from './pages/admin/InventoryPage.tsx';
 import AuditLogsPage from './pages/admin/AuditLogsPage.tsx';
 import ForecastingPage from './pages/admin/ForecastingPage.tsx';
@@ -151,6 +152,14 @@ function AppRoutes() {
         element={
           <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
             <CustomersPage />
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/customers/:customerId"
+        element={
+          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
+            <CustomerDetailsPage />
           </RoleProtectedRoute>
         }
       />
