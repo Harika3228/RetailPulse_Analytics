@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   MenuItem,
+  Skeleton,
   Stack,
   Table,
   TableBody,
@@ -28,6 +29,7 @@ import {
   getSaleValidationError,
   isSaleFormIncomplete,
   saleFormToPayload,
+  saleNumberOfItems,
   saleTransactionToForm,
 } from './salesShared.js';
 
@@ -36,6 +38,8 @@ export default function SalesPage() {
   const navigate = useNavigate();
 
   const [errorMessage, setErrorMessage] = useState('');
+  const [transactionsLoading, setTransactionsLoading] = useState(false);
+  const [summaryLoading, setSummaryLoading] = useState(false);
   const [salesSummary, setSalesSummary] = useState({
     totalSales: 0,
     totalRevenue: 0,
@@ -43,6 +47,7 @@ export default function SalesPage() {
     averageOrderValue: 0,
   });
   const [products, setProducts] = useState([]);
+  const [customers, setCustomers] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [categories, setCategories] = useState([]);
 
@@ -52,12 +57,14 @@ export default function SalesPage() {
   const [dateTo, setDateTo] = useState('');
   const [filterCategoryId, setFilterCategoryId] = useState('');
   const [filterChannel, setFilterChannel] = useState('');
-  const [filterPayment, setFilterPayment] = useState('');
+  const [filterPaymentMethod, setFilterPaymentMethod] = useState('');
+  const [filterPaymentStatus, setFilterPaymentStatus] = useState('');
   const [sortBy, setSortBy] = useState('date');
   const [sortOrder, setSortOrder] = useState('desc');
 
   const [saleDialogOpen, setSaleDialogOpen] = useState(false);
   const [saleDeleteDialogOpen, setSaleDeleteDialogOpen] = useState(false);
+  const [saleSubmitting, setSaleSubmitting] = useState(false);
   const [saleFormError, setSaleFormError] = useState('');
   const [saleSuccessMessage, setSaleSuccessMessage] = useState('');
   const [saleForm, setSaleForm] = useState(defaultSaleForm());
@@ -76,11 +83,12 @@ export default function SalesPage() {
     }
     if (filterCategoryId) params.set('categoryId', filterCategoryId);
     if (filterChannel) params.set('salesChannel', filterChannel);
-    if (filterPayment) params.set('paymentMethod', filterPayment);
+    if (filterPaymentMethod) params.set('paymentMethod', filterPaymentMethod);
+    if (filterPaymentStatus) params.set('paymentStatus', filterPaymentStatus);
     params.set('sortBy', sortBy);
     params.set('sortOrder', sortOrder);
     return params.toString();
-  }, [searchQuery, dateFrom, dateTo, filterCategoryId, filterChannel, filterPayment, sortBy, sortOrder]);
+  }, [searchQuery, dateFrom, dateTo, filterCategoryId, filterChannel, filterPaymentMethod, filterPaymentStatus, sortBy, sortOrder]);
 
   const loadCategories = useCallback(async () => {
     if (!token) return;
@@ -101,11 +109,14 @@ export default function SalesPage() {
 
   const loadSalesSummary = useCallback(async () => {
     if (!token) return;
+    setSummaryLoading(true);
     try {
       const payload = await apiRequest('/dashboard/sales-summary', token);
       setSalesSummary(payload);
     } catch {
       // non-fatal
+    } finally {
+      setSummaryLoading(false);
     }
   }, [token]);
 
@@ -119,22 +130,36 @@ export default function SalesPage() {
     }
   }, [token]);
 
+  const loadCustomers = useCallback(async () => {
+    if (!token) return;
+    try {
+      const payload = await apiRequest('/sales/customers/selectable', token);
+      setCustomers(payload);
+    } catch {
+      // non-fatal
+    }
+  }, [token]);
+
   const loadTransactions = useCallback(async () => {
     if (!token) return;
+    setTransactionsLoading(true);
     try {
       const qs = buildQueryString();
       const payload = await apiRequest(`/sales?${qs}`, token);
       setTransactions(payload);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to load sales transactions');
+    } finally {
+      setTransactionsLoading(false);
     }
   }, [token, buildQueryString]);
 
   useEffect(() => {
     loadCategories();
     loadProducts();
+    loadCustomers();
     loadSalesSummary();
-  }, [loadCategories, loadProducts, loadSalesSummary]);
+  }, [loadCategories, loadProducts, loadCustomers, loadSalesSummary]);
 
   // Re-fetch whenever any filter/sort changes
   useEffect(() => {
@@ -169,6 +194,8 @@ export default function SalesPage() {
 
     const payload = saleFormToPayload(saleForm);
 
+    setSaleSubmitting(true);
+    setSaleFormError('');
     try {
       let saved;
       if (editingTransactionId) {
@@ -194,6 +221,8 @@ export default function SalesPage() {
       await loadSalesSummary();
     } catch (error) {
       setSaleFormError(error instanceof Error ? error.message : 'Unable to save sales transaction');
+    } finally {
+      setSaleSubmitting(false);
     }
   };
 
@@ -222,27 +251,39 @@ export default function SalesPage() {
 
   return (
     <AdminLayout>
-      {errorMessage ? <Alert severity="error">{errorMessage}</Alert> : null}
-      {saleSuccessMessage ? <Alert severity="success">{saleSuccessMessage}</Alert> : null}
+      {errorMessage ? (
+        <Alert severity="error" onClose={() => setErrorMessage('')}>{errorMessage}</Alert>
+      ) : null}
+      {saleSuccessMessage ? (
+        <Alert severity="success" onClose={() => setSaleSuccessMessage('')}>{saleSuccessMessage}</Alert>
+      ) : null}
       <Card className="dashboard-content__header-card">
         <Typography className="dashboard-content__title">Sales Dashboard</Typography>
         <Typography className="dashboard-content__breadcrumbs">Sales Summary</Typography>
         <Box className="dashboard-summary-grid">
           <Card className="dashboard-summary-card">
             <Typography className="dashboard-summary-card__label">Total Sales</Typography>
-            <Typography className="dashboard-summary-card__value">{formatCurrency(salesSummary.totalSales)}</Typography>
+            <Typography className="dashboard-summary-card__value">
+              {summaryLoading ? <Skeleton width={110} /> : formatCurrency(salesSummary.totalSales)}
+            </Typography>
           </Card>
           <Card className="dashboard-summary-card">
             <Typography className="dashboard-summary-card__label">Total Revenue</Typography>
-            <Typography className="dashboard-summary-card__value">{formatCurrency(salesSummary.totalRevenue)}</Typography>
+            <Typography className="dashboard-summary-card__value">
+              {summaryLoading ? <Skeleton width={110} /> : formatCurrency(salesSummary.totalRevenue)}
+            </Typography>
           </Card>
           <Card className="dashboard-summary-card">
             <Typography className="dashboard-summary-card__label">Total Orders</Typography>
-            <Typography className="dashboard-summary-card__value">{salesSummary.totalOrders}</Typography>
+            <Typography className="dashboard-summary-card__value">
+              {summaryLoading ? <Skeleton width={60} /> : salesSummary.totalOrders}
+            </Typography>
           </Card>
           <Card className="dashboard-summary-card">
             <Typography className="dashboard-summary-card__label">Average Order Value</Typography>
-            <Typography className="dashboard-summary-card__value">{formatCurrency(salesSummary.averageOrderValue)}</Typography>
+            <Typography className="dashboard-summary-card__value">
+              {summaryLoading ? <Skeleton width={110} /> : formatCurrency(salesSummary.averageOrderValue)}
+            </Typography>
           </Card>
         </Box>
       </Card>
@@ -317,17 +358,32 @@ export default function SalesPage() {
           <TextField
             select
             size="small"
-            label="Payment"
-            value={filterPayment}
-            onChange={(e) => setFilterPayment(e.target.value)}
-            sx={{ minWidth: 140 }}
+            label="Payment Method"
+            value={filterPaymentMethod}
+            onChange={(e) => setFilterPaymentMethod(e.target.value)}
+            sx={{ minWidth: 150 }}
           >
-            <MenuItem value="">All Payments</MenuItem>
+            <MenuItem value="">All Payment Methods</MenuItem>
             <MenuItem value="Cash">Cash</MenuItem>
             <MenuItem value="Card">Card</MenuItem>
             <MenuItem value="UPI">UPI</MenuItem>
             <MenuItem value="Bank Transfer">Bank Transfer</MenuItem>
             <MenuItem value="Wallet">Wallet</MenuItem>
+          </TextField>
+          <TextField
+            select
+            size="small"
+            label="Payment Status"
+            value={filterPaymentStatus}
+            onChange={(e) => setFilterPaymentStatus(e.target.value)}
+            sx={{ minWidth: 150 }}
+          >
+            <MenuItem value="">All Payment Statuses</MenuItem>
+            <MenuItem value="Paid">Paid</MenuItem>
+            <MenuItem value="Pending">Pending</MenuItem>
+            <MenuItem value="Partial">Partially Paid</MenuItem>
+            <MenuItem value="Refunded">Refunded</MenuItem>
+            <MenuItem value="Cancelled">Cancelled</MenuItem>
           </TextField>
           <TextField
             select
@@ -340,6 +396,7 @@ export default function SalesPage() {
             <MenuItem value="date">Date</MenuItem>
             <MenuItem value="invoice">Invoice Number</MenuItem>
             <MenuItem value="total">Total Amount</MenuItem>
+            <MenuItem value="customer">Customer Name</MenuItem>
           </TextField>
           <TextField
             select
@@ -360,7 +417,8 @@ export default function SalesPage() {
               setDateTo('');
               setFilterCategoryId('');
               setFilterChannel('');
-              setFilterPayment('');
+              setFilterPaymentMethod('');
+              setFilterPaymentStatus('');
               setSortBy('date');
               setSortOrder('desc');
             }}
@@ -376,56 +434,81 @@ export default function SalesPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Invoice</TableCell>
-                <TableCell>Date</TableCell>
-                <TableCell>Customer</TableCell>
+                <TableCell>Invoice Number</TableCell>
+                <TableCell>Sale Date</TableCell>
+                <TableCell>Customer Name</TableCell>
                 <TableCell>Product</TableCell>
                 <TableCell>Category</TableCell>
-                <TableCell>Qty</TableCell>
+                <TableCell>Number of Items</TableCell>
                 <TableCell>Remaining Stock</TableCell>
-                <TableCell>Total</TableCell>
+                <TableCell>Total Amount</TableCell>
                 <TableCell>Channel</TableCell>
-                <TableCell>Payment</TableCell>
+                <TableCell>Payment Method</TableCell>
+                <TableCell>Payment Status</TableCell>
                 <TableCell>Actions</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {transactions.map((transaction) => {
-                const firstLine = transaction.lines?.[0] ?? null;
-                const lineCount = transaction.lines?.length ?? 0;
-                return (
-                  <TableRow key={transaction.transactionId}>
-                    <TableCell>{transaction.invoiceNumber}</TableCell>
-                    <TableCell>{formatSaleDatetime(transaction.saleDateTime)}</TableCell>
-                    <TableCell>{transaction.customerName ?? '-'}</TableCell>
-                    <TableCell>
-                      <Stack spacing={0.5}>
-                        <Typography>{firstLine?.productName ?? '-'}</Typography>
-                        {lineCount > 1 ? <Typography variant="caption">+ {lineCount - 1} more</Typography> : null}
-                      </Stack>
-                    </TableCell>
-                    <TableCell>{firstLine?.categoryName ?? '-'}</TableCell>
-                    <TableCell>{firstLine?.quantity ?? 0}</TableCell>
-                    <TableCell>{firstLine?.remainingStock ?? '-'}</TableCell>
-                    <TableCell>{formatCurrency(transaction.totalAmount)}</TableCell>
-                    <TableCell>{transaction.salesChannel ?? '-'}</TableCell>
-                    <TableCell>{transaction.paymentMethod ?? '-'}</TableCell>
-                    <TableCell>
-                      <Stack direction="row" spacing={1}>
-                        <Button size="small" onClick={() => navigate(`/sales/${transaction.transactionId}`)}>
-                          View
-                        </Button>
-                        <Button size="small" onClick={() => openEditSale(transaction)}>
-                          Edit
-                        </Button>
-                        <Button size="small" color="error" onClick={() => confirmDeleteSale(transaction)}>
-                          Delete
-                        </Button>
-                      </Stack>
-                    </TableCell>
+              {transactionsLoading ? (
+                Array.from({ length: 5 }).map((_, rowIndex) => (
+                  <TableRow key={`skeleton-${rowIndex}`}>
+                    {Array.from({ length: 12 }).map((__, colIndex) => (
+                      <TableCell key={`skeleton-${rowIndex}-${colIndex}`}>
+                        <Skeleton animation="wave" />
+                      </TableCell>
+                    ))}
                   </TableRow>
-                );
-              })}
+                ))
+              ) : transactions.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={12}>
+                    <Box sx={{ textAlign: 'center', py: 6 }}>
+                      <Typography variant="h6" color="text.secondary">No Sales Found</Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                        Try adjusting your search or filters, or create a new sale.
+                      </Typography>
+                    </Box>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                transactions.map((transaction) => {
+                  const firstLine = transaction.lines?.[0] ?? null;
+                  const lineCount = transaction.lines?.length ?? 0;
+                  return (
+                    <TableRow key={transaction.transactionId}>
+                      <TableCell>{transaction.invoiceNumber}</TableCell>
+                      <TableCell>{formatSaleDatetime(transaction.saleDateTime)}</TableCell>
+                      <TableCell>{transaction.customerName ?? '-'}</TableCell>
+                      <TableCell>
+                        <Stack spacing={0.5}>
+                          <Typography>{firstLine?.productName ?? '-'}</Typography>
+                          {lineCount > 1 ? <Typography variant="caption">+ {lineCount - 1} more</Typography> : null}
+                        </Stack>
+                      </TableCell>
+                      <TableCell>{firstLine?.categoryName ?? '-'}</TableCell>
+                      <TableCell>{saleNumberOfItems(transaction)}</TableCell>
+                      <TableCell>{firstLine?.remainingStock ?? '-'}</TableCell>
+                      <TableCell>{formatCurrency(transaction.totalAmount)}</TableCell>
+                      <TableCell>{transaction.salesChannel ?? '-'}</TableCell>
+                      <TableCell>{transaction.paymentMethod ?? '-'}</TableCell>
+                      <TableCell>{transaction.paymentStatus ?? 'Paid'}</TableCell>
+                      <TableCell>
+                        <Stack direction="row" spacing={1}>
+                          <Button size="small" onClick={() => navigate(`/sales/${transaction.transactionId}`)}>
+                            View
+                          </Button>
+                          <Button size="small" onClick={() => openEditSale(transaction)}>
+                            Edit
+                          </Button>
+                          <Button size="small" color="error" onClick={() => confirmDeleteSale(transaction)}>
+                            Delete
+                          </Button>
+                        </Stack>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
             </TableBody>
           </Table>
         </TableContainer>
@@ -435,9 +518,11 @@ export default function SalesPage() {
         open={saleDialogOpen}
         editingTransactionId={editingTransactionId}
         products={products}
+        customers={customers}
         form={saleForm}
         errorMessage={saleFormError}
         submitDisabled={Boolean(getSaleValidationError(saleForm, products)) || isSaleFormIncomplete(saleForm) || calculateSaleTotal(saleForm) < 0}
+        submitting={saleSubmitting}
         onChange={setSaleForm}
         onClose={() => setSaleDialogOpen(false)}
         onSubmit={submitSale}

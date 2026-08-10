@@ -21,6 +21,13 @@ export function formatSaleDatetime(value: string | Date | null | undefined) {
   }).format(date);
 }
 
+export function saleNumberOfItems(transaction: Record<string, any> | null | undefined) {
+  return (transaction?.lines ?? []).reduce(
+    (sum, line) => sum + Number(line.quantity || 0),
+    0,
+  );
+}
+
 export function defaultSaleForm() {
   return {
     productId: '',
@@ -34,6 +41,8 @@ export function defaultSaleForm() {
     taxAmount: '0',
     salesChannel: 'Retail Store',
     paymentMethod: 'Cash',
+    paymentStatus: 'Paid',
+    notes: '',
   };
 }
 
@@ -51,6 +60,8 @@ export function saleTransactionToForm(transaction: Record<string, any> | null | 
     taxAmount: String(transaction?.taxAmount ?? 0),
     salesChannel: transaction?.salesChannel ?? 'Retail Store',
     paymentMethod: transaction?.paymentMethod ?? 'Cash',
+    paymentStatus: transaction?.paymentStatus ?? 'Paid',
+    notes: transaction?.notes ?? '',
   };
 }
 
@@ -63,6 +74,8 @@ export function saleFormToPayload(form: Record<string, any>) {
     saleDateTime: form.saleDateTime,
     salesChannel: form.salesChannel.trim(),
     paymentMethod: form.paymentMethod.trim(),
+    paymentStatus: String(form.paymentStatus ?? 'Paid').trim() || 'Paid',
+    notes: form.notes?.trim() ?? '',
     discountAmount: Number(form.discountAmount || 0),
     taxAmount: Number(form.taxAmount || 0),
   };
@@ -76,17 +89,28 @@ export function isSaleFormIncomplete(form: Record<string, any>) {
     Number(form.quantity) <= 0 ||
     Number(form.unitPrice) <= 0 ||
     !String(form.salesChannel).trim() ||
-    !String(form.paymentMethod).trim()
+    !String(form.paymentMethod).trim() ||
+    !String(form.paymentStatus).trim()
   );
 }
 
 export function calculateSaleTotal(form: Record<string, any>) {
+  const { subtotal, discount, tax } = calculateSaleBreakdown(form);
+  return Math.max(0, subtotal - discount + tax);
+}
+
+export function calculateSaleBreakdown(form: Record<string, any>) {
   const quantity = Number(form.quantity || 0);
   const unitPrice = Number(form.unitPrice || 0);
   const discount = Number(form.discountAmount || 0);
   const tax = Number(form.taxAmount || 0);
   const subtotal = quantity * unitPrice;
-  return Math.max(0, subtotal - discount + tax);
+  return {
+    subtotal,
+    discount,
+    tax,
+    total: Math.max(0, subtotal - discount + tax),
+  };
 }
 
 export function calculateSaleSubtotal(form: Record<string, any>) {
@@ -95,14 +119,42 @@ export function calculateSaleSubtotal(form: Record<string, any>) {
   return quantity * unitPrice;
 }
 
+export function getQuantityValidationError(form: Record<string, any>, products: Array<Record<string, any>>) {
+  const quantityValue = form.quantity;
+  if (quantityValue === '' || quantityValue === null || quantityValue === undefined) {
+    return 'Quantity is required.';
+  }
+  const quantity = Number(quantityValue);
+  if (!Number.isFinite(quantity)) {
+    return 'Quantity must be a valid number.';
+  }
+  if (quantity < 0) {
+    return 'Quantity cannot be negative.';
+  }
+  if (quantity === 0) {
+    return 'Quantity must be greater than zero.';
+  }
+  if (!Number.isInteger(quantity)) {
+    return 'Quantity must be a whole number.';
+  }
+  const selectedProduct = products.find((product) => String(product.id) === String(form.productId));
+  if (selectedProduct) {
+    const available = Number(selectedProduct.stockQuantity || 0);
+    if (quantity > available) {
+      return `Quantity cannot exceed available stock (${available} available).`;
+    }
+  }
+  return '';
+}
+
 export function getSaleValidationError(form: Record<string, any>, products: Array<Record<string, any>>) {
   if (!String(form.productId).trim()) {
     return 'Please Select Product.';
   }
 
-  const quantity = Number(form.quantity || 0);
-  if (quantity <= 0) {
-    return 'Quantity must be greater than zero.';
+  const quantityError = getQuantityValidationError(form, products);
+  if (quantityError) {
+    return quantityError;
   }
 
   const unitPrice = Number(form.unitPrice || 0);
@@ -122,11 +174,6 @@ export function getSaleValidationError(form: Record<string, any>, products: Arra
   const subtotal = calculateSaleSubtotal(form);
   if (discount > subtotal) {
     return 'Discount cannot exceed product value.';
-  }
-
-  const selectedProduct = products.find((product) => String(product.id) === String(form.productId));
-  if (selectedProduct && quantity > Number(selectedProduct.stockQuantity || 0)) {
-    return 'Insufficient Stock Available.';
   }
 
   return '';

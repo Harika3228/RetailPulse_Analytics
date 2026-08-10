@@ -482,12 +482,22 @@ class SalesTransactionRequest(BaseModel):
     productId: int | None = None
     quantity: int | None = None
     unitPrice: float | None = None
+    customerId: int | None = None
     customerName: str | None = None
     saleDateTime: str | None = None
     salesChannel: str | None = None
     paymentMethod: str | None = None
+    paymentStatus: str | None = None
+    notes: str | None = None
     discountAmount: float | None = 0
     taxAmount: float | None = 0
+
+    @field_validator("customerId")
+    @classmethod
+    def validate_customer_id(cls, value: int | None) -> int | None:
+        if value is not None and value <= 0:
+            raise ValueError("Customer is required")
+        return value
 
     @field_validator("quantity")
     @classmethod
@@ -516,6 +526,13 @@ class SalesSelectableProductResponse(BaseModel):
     status: str
 
 
+class SalesSelectableCustomerResponse(BaseModel):
+    id: int
+    name: str
+    email: str = ""
+    phone: str | None = None
+
+
 class SalesLineResponse(BaseModel):
     productId: int
     productName: str
@@ -533,10 +550,15 @@ class SalesTransactionResponse(BaseModel):
     invoiceNumber: str
     companyId: int
     createdBy: int
+    customerId: int | None = None
     customerName: str | None = None
     saleDateTime: str
+    status: str = "completed"
     salesChannel: str | None = None
     paymentMethod: str | None = None
+    paymentStatus: str | None = None
+    notes: str | None = None
+    salesperson: str | None = None
     subtotalAmount: float
     discountAmount: float
     taxAmount: float
@@ -544,6 +566,21 @@ class SalesTransactionResponse(BaseModel):
     createdAt: str
     updatedAt: str | None = None
     lines: list[SalesLineResponse]
+
+
+class StockMovementResponse(BaseModel):
+    id: int
+    productId: int
+    productName: str
+    sku: str
+    movementType: str
+    previousQuantity: int
+    updatedQuantity: int
+    quantityChanged: int
+    reference: str | None = None
+    saleId: int | None = None
+    actor: str | None = None
+    timestamp: str | None = None
 
 
 class ForecastPoint(BaseModel):

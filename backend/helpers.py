@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from backend.database import engine
 from backend.models import (
     AuditLog, Category, Customer, Notification, Product, SalesTransaction,
-    SalesTransactionLine,
+    SalesTransactionLine, StockMovement, User,
 )
 from backend.schemas import (
     AnalyticsDashboardResponse,
@@ -598,7 +598,48 @@ def _sales_transaction_delta_map(line_payloads: list[dict], sign: int) -> dict[i
     return deltas
 
 
-def _apply_sales_stock_delta(db, company_id: int, deltas: dict[int, int], company_name: str | None = None, actor_email: str | None = None, invoice_number: str | None = None) -> None:
+def _record_stock_movement(
+    db,
+    company_id: int,
+    product,
+    movement_type: str,
+    previous_quantity: int,
+    updated_quantity: int,
+    quantity_changed: int,
+    reference: str | None = None,
+    sale_id: int | None = None,
+    actor: str | None = None,
+    actor_user_id: int | None = None,
+) -> None:
+    db.add(
+        StockMovement(
+            companyId=company_id,
+            productId=product.id,
+            productName=product.name,
+            sku=product.sku,
+            movementType=movement_type,
+            previousQuantity=previous_quantity,
+            updatedQuantity=updated_quantity,
+            quantityChanged=quantity_changed,
+            reference=reference,
+            saleId=sale_id,
+            actor=actor,
+            actorUserId=actor_user_id,
+        )
+    )
+
+
+def _apply_sales_stock_delta(
+    db,
+    company_id: int,
+    deltas: dict[int, int],
+    company_name: str | None = None,
+    actor_email: str | None = None,
+    invoice_number: str | None = None,
+    movement_type: str = "Sale",
+    sale_id: int | None = None,
+    actor_user_id: int | None = None,
+) -> None:
     for product_id, delta in deltas.items():
         if delta == 0:
             continue
@@ -609,6 +650,19 @@ def _apply_sales_stock_delta(db, company_id: int, deltas: dict[int, int], compan
         updated_stock = current_stock + delta
         if updated_stock < 0:
             raise HTTPException(status_code=400, detail=f"Insufficient stock for product: {product.sku}")
+        _record_stock_movement(
+            db,
+            company_id,
+            product,
+            movement_type,
+            current_stock,
+            updated_stock,
+            delta,
+            reference=invoice_number,
+            sale_id=sale_id,
+            actor=actor_email,
+            actor_user_id=actor_user_id,
+        )
         product.stockQuantity = updated_stock
         product.initialStockQuantity = updated_stock
         if actor_email:
@@ -643,6 +697,40 @@ def _apply_sales_stock_delta(db, company_id: int, deltas: dict[int, int], compan
         product.updatedAt = datetime.now(timezone.utc)
 
 
+def _resolve_sale_customer(
+    db,
+    user,
+    payload: SalesTransactionRequest,
+    current_customer_name: str | None = None,
+    current_customer_id: int | None = None,
+) -> tuple[str, int | None]:
+    customer_id = payload.customerId
+    customer = None
+    if customer_id is not None:
+        customer = (
+            db.query(Customer)
+            .filter(
+                Customer.id == customer_id,
+                Customer.companyId == user.companyId,
+                Customer.isDeleted != 1,
+            )
+            .first()
+        )
+        if not customer:
+            raise HTTPException(status_code=404, detail=f"Customer not found: {customer_id}")
+    elif current_customer_id is not None:
+        customer_id = current_customer_id
+
+    customer_name = (payload.customerName or "").strip()
+    if not customer_name and current_customer_name:
+        customer_name = current_customer_name.strip()
+    if customer and not customer_name:
+        customer_name = (customer.name or "").strip()
+    if not customer_name:
+        customer_name = "Walk-in Customer"
+    return customer_name, customer_id
+
+
 def _save_sales_transaction(db, tx, line_payloads: list[dict], payload: SalesTransactionRequest, user) -> object:
     subtotal_amount = sum(float(line["lineTotal"]) for line in line_payloads)
     discount_amount = float(payload.discountAmount or 0)
@@ -653,10 +741,21 @@ def _save_sales_transaction(db, tx, line_payloads: list[dict], payload: SalesTra
     if total_amount < 0:
         raise HTTPException(status_code=400, detail="Total amount cannot be negative")
 
-    tx.customerName = (payload.customerName or "Walk-in Customer").strip()
+    customer_name, customer_id = _resolve_sale_customer(
+        db,
+        user,
+        payload,
+        current_customer_name=tx.customerName,
+        current_customer_id=tx.customerId,
+    )
+    tx.customerId = customer_id
+    tx.customerName = customer_name
+    tx.status = "completed"
     tx.saleDateTime = _parse_sale_datetime(payload.saleDateTime)
     tx.salesChannel = (payload.salesChannel or "In-Store").strip()
     tx.paymentMethod = (payload.paymentMethod or "Cash").strip()
+    tx.paymentStatus = (payload.paymentStatus or "Paid").strip()
+    tx.notes = (payload.notes or "").strip() or None
     tx.subtotalAmount = subtotal_amount
     tx.discountAmount = discount_amount
     tx.taxAmount = tax_amount
@@ -742,6 +841,11 @@ def _transaction_response(db, tx) -> SalesTransactionResponse:
         )
         for line in lines
     ]
+    salesperson = None
+    if tx.createdBy:
+        creator = db.query(User).filter(User.id == tx.createdBy).first()
+        if creator:
+            salesperson = creator.name or creator.email
     return SalesTransactionResponse(
         transactionId=tx.id,
         invoiceNumber=tx.invoiceNumber or _format_invoice_number(
@@ -749,10 +853,15 @@ def _transaction_response(db, tx) -> SalesTransactionResponse:
         ),
         companyId=tx.companyId,
         createdBy=tx.createdBy,
+        customerId=tx.customerId,
         customerName=tx.customerName,
         saleDateTime=_datetime_to_iso(tx.saleDateTime) or "",
+        status=tx.status or "completed",
         salesChannel=tx.salesChannel,
         paymentMethod=tx.paymentMethod,
+        paymentStatus=tx.paymentStatus or "Paid",
+        notes=tx.notes,
+        salesperson=salesperson,
         subtotalAmount=float(tx.subtotalAmount or 0),
         discountAmount=float(tx.discountAmount or 0),
         taxAmount=float(tx.taxAmount or 0),

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
-from sqlalchemy import asc, desc
+from sqlalchemy import asc, desc, func
 
 from backend.auth_utils import get_company_for_user, get_current_user
 from backend.controllers.customers_controller import refresh_customer_metrics_for_company
@@ -15,11 +15,13 @@ from backend.helpers import (
     _transaction_response,
     create_audit_log,
 )
-from backend.models import Category, Product, SalesTransaction, SalesTransactionLine
+from backend.models import Category, Customer, Product, SalesTransaction, SalesTransactionLine, StockMovement
 from backend.schemas import (
+    SalesSelectableCustomerResponse,
     SalesSelectableProductResponse,
     SalesTransactionRequest,
     SalesTransactionResponse,
+    StockMovementResponse,
 )
 
 
@@ -77,6 +79,40 @@ def list_selectable_products_for_sales(
     ]
 
 
+def list_selectable_customers_for_sales(
+    db: DbDependency,
+    q: str | None = None,
+    authorization: str | None = None,
+) -> list[SalesSelectableCustomerResponse]:
+    token = _extract_token(authorization)
+    user = get_current_user(db, token)
+    _ensure_sales_user(user)
+
+    query = db.query(Customer).filter(
+        Customer.companyId == user.companyId,
+        Customer.isDeleted != 1,
+    )
+    if q:
+        wildcard = f"%{q.strip()}%"
+        query = query.filter(
+            Customer.name.ilike(wildcard)
+            | Customer.email.ilike(wildcard)
+            | Customer.phone.ilike(wildcard)
+        )
+    customers = query.order_by(Customer.name.asc()).all()
+    create_audit_log(db, company=str(user.companyId), user=user.email,
+                     action="List Sales Selectable Customers", ip_address="Unknown", browser="Unknown")
+    return [
+        SalesSelectableCustomerResponse(
+            id=c.id,
+            name=c.name or "",
+            email=c.email or "",
+            phone=c.phone,
+        )
+        for c in customers
+    ]
+
+
 def list_sales_transactions(
     db: DbDependency,
     q: str | None = None,
@@ -85,6 +121,7 @@ def list_sales_transactions(
     categoryId: int | None = None,
     salesChannel: str | None = None,
     paymentMethod: str | None = None,
+    paymentStatus: str | None = None,
     sortBy: str | None = None,
     sortOrder: str | None = None,
     authorization: str | None = None,
@@ -144,6 +181,8 @@ def list_sales_transactions(
         query = query.filter(SalesTransaction.salesChannel.ilike(salesChannel))
     if paymentMethod:
         query = query.filter(SalesTransaction.paymentMethod.ilike(paymentMethod))
+    if paymentStatus:
+        query = query.filter(SalesTransaction.paymentStatus.ilike(paymentStatus))
 
     normalized_sort = (sortBy or "date").strip().lower()
     normalized_order = (sortOrder or "desc").strip().lower()
@@ -153,6 +192,12 @@ def list_sales_transactions(
         query = query.order_by(order_fn(SalesTransaction.invoiceNumber))
     elif normalized_sort == "total":
         query = query.order_by(order_fn(SalesTransaction.totalAmount))
+    elif normalized_sort == "customer":
+        customer_col = func.lower(SalesTransaction.customerName)
+        if normalized_order == "asc":
+            query = query.order_by(customer_col.asc().nullslast(), SalesTransaction.id.asc())
+        else:
+            query = query.order_by(customer_col.desc().nullslast(), SalesTransaction.id.desc())
     else:
         query = query.order_by(order_fn(SalesTransaction.saleDateTime), desc(SalesTransaction.id))
 
@@ -186,18 +231,27 @@ def create_sales_transaction(payload: SalesTransactionRequest, db: DbDependency,
     company = get_company_for_user(db, user)
 
     line_payloads = _build_sales_line_payloads(db, user, payload)
+
+    tx = SalesTransaction(companyId=user.companyId, createdBy=user.id)
+    db.add(tx)
+    db.flush()
+
     _apply_sales_stock_delta(
         db,
         user.companyId,
         _sales_transaction_delta_map(line_payloads, -1),
         company_name=company.name,
         actor_email=user.email,
-        invoice_number=None,
+        actor_user_id=user.id,
+        movement_type="Sale",
+        sale_id=tx.id,
     )
 
-    tx = SalesTransaction(companyId=user.companyId, createdBy=user.id)
-    db.add(tx)
     tx = _save_sales_transaction(db, tx, line_payloads, payload, user)
+    db.query(StockMovement).filter(
+        StockMovement.saleId == tx.id, StockMovement.reference.is_(None)
+    ).update({"reference": tx.invoiceNumber}, synchronize_session=False)
+    db.commit()
     refresh_customer_metrics_for_company(db, user.companyId)
 
     create_audit_log(db, company=company.name, user=user.email,
@@ -229,7 +283,10 @@ def update_sales_transaction(transaction_id: int, payload: SalesTransactionReque
         _sales_transaction_delta_map(old_line_payloads, +1),
         company_name=company.name,
         actor_email=user.email,
+        actor_user_id=user.id,
         invoice_number=tx.invoiceNumber,
+        movement_type="Sale Return",
+        sale_id=tx.id,
     )
     try:
         _apply_sales_stock_delta(
@@ -238,7 +295,10 @@ def update_sales_transaction(transaction_id: int, payload: SalesTransactionReque
             _sales_transaction_delta_map(new_line_payloads, -1),
             company_name=company.name,
             actor_email=user.email,
+            actor_user_id=user.id,
             invoice_number=tx.invoiceNumber,
+            movement_type="Sale",
+            sale_id=tx.id,
         )
         tx = _save_sales_transaction(db, tx, new_line_payloads, payload, user)
         refresh_customer_metrics_for_company(db, user.companyId)
@@ -272,7 +332,10 @@ def delete_sales_transaction(transaction_id: int, db: DbDependency, authorizatio
         _sales_transaction_delta_map([{"productId": line.productId, "quantity": line.quantity or 0} for line in old_lines], +1),
         company_name=company.name,
         actor_email=user.email,
+        actor_user_id=user.id,
         invoice_number=tx.invoiceNumber,
+        movement_type="Sale Return",
+        sale_id=tx.id,
     )
 
     db.query(SalesTransactionLine).filter(SalesTransactionLine.transactionId == tx.id).delete()
@@ -301,3 +364,45 @@ def sales_history_report(db: DbDependency, authorization: str | None = None) -> 
     create_audit_log(db, company=str(user.companyId), user=user.email,
                      action="View Sales History Report", ip_address="Unknown", browser="Unknown")
     return [_transaction_response(db, tx) for tx in transactions]
+
+
+def list_sale_stock_movements(
+    transaction_id: int,
+    db: DbDependency,
+    authorization: str | None = None,
+) -> list[StockMovementResponse]:
+    token = _extract_token(authorization)
+    user = get_current_user(db, token)
+    _ensure_sales_user(user)
+
+    tx = db.query(SalesTransaction).filter(
+        SalesTransaction.id == transaction_id, SalesTransaction.companyId == user.companyId
+    ).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Sales transaction not found")
+
+    movements = (
+        db.query(StockMovement)
+        .filter(StockMovement.saleId == tx.id, StockMovement.companyId == user.companyId)
+        .order_by(StockMovement.id.asc())
+        .all()
+    )
+    create_audit_log(db, company=str(user.companyId), user=user.email,
+                     action=f"View Stock Movements for Sale:{tx.id}", ip_address="Unknown", browser="Unknown")
+    return [
+        StockMovementResponse(
+            id=movement.id,
+            productId=movement.productId,
+            productName=movement.productName or "",
+            sku=movement.sku or "",
+            movementType=movement.movementType or "",
+            previousQuantity=int(movement.previousQuantity or 0),
+            updatedQuantity=int(movement.updatedQuantity or 0),
+            quantityChanged=int(movement.quantityChanged or 0),
+            reference=movement.reference,
+            saleId=movement.saleId,
+            actor=movement.actor,
+            timestamp=movement.createdAt.isoformat() if movement.createdAt else None,
+        )
+        for movement in movements
+    ]

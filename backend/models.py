@@ -153,10 +153,14 @@ class SalesTransaction(Base):
     companyId = Column(Integer, index=True)
     createdBy = Column(Integer, index=True)
     invoiceNumber = Column(String, index=True)
+    customerId = Column(Integer, index=True, nullable=True)
     customerName = Column(String)
     saleDateTime = Column("saleDate", DateTime, default=datetime.now(timezone.utc))
+    status = Column(String, default="completed")
     salesChannel = Column(String)
     paymentMethod = Column(String)
+    paymentStatus = Column(String, default="Paid")
+    notes = Column(String)
     subtotalAmount = Column(Float, default=0)
     discountAmount = Column(Float, default=0)
     taxAmount = Column(Float, default=0)
@@ -195,6 +199,24 @@ class StockAdjustment(Base):
     adjustedBy = Column(String)
     adjustedByUserId = Column(Integer, nullable=True)
     adjustmentDate = Column(DateTime, default=datetime.now(timezone.utc))
+    createdAt = Column(DateTime, default=datetime.now(timezone.utc))
+
+
+class StockMovement(Base):
+    __tablename__ = "stock_movements"
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    productId = Column(Integer, index=True)
+    productName = Column(String)
+    sku = Column(String, index=True)
+    movementType = Column(String, index=True)
+    previousQuantity = Column(Integer)
+    updatedQuantity = Column(Integer)
+    quantityChanged = Column(Integer)
+    reference = Column(String)
+    saleId = Column(Integer, index=True, nullable=True)
+    actor = Column(String)
+    actorUserId = Column(Integer, nullable=True)
     createdAt = Column(DateTime, default=datetime.now(timezone.utc))
 
 

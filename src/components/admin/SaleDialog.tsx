@@ -1,31 +1,38 @@
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
   MenuItem,
   Stack,
   TextField,
   Typography,
 } from '@mui/material';
-import { calculateSaleTotal } from '../../pages/admin/salesShared.js';
+import { formatCurrency } from '../../pages/admin/adminShared.js';
+import { calculateSaleBreakdown, getQuantityValidationError } from '../../pages/admin/salesShared.js';
 
 export default function SaleDialog({
   open,
   editingTransactionId,
   products,
+  customers = [],
   form,
   errorMessage,
   submitDisabled,
+  submitting = false,
   onChange,
   onClose,
   onSubmit,
 }) {
   const selectedProduct = products.find((product) => String(product.id) === String(form.productId)) ?? null;
-  const totalAmount = calculateSaleTotal(form);
+  const billing = calculateSaleBreakdown(form);
+  const customerOptions = ['Walk-in Customer', ...customers.map((customer) => customer.name)];
+  const quantityError = getQuantityValidationError(form, products);
 
   const handleProductChange = (event) => {
     const nextProductId = event.target.value;
@@ -60,8 +67,32 @@ export default function SaleDialog({
             InputLabelProps={{ shrink: true }}
           />
 
-          <TextField label="Customer Name *" value={form.customerName} onChange={updateField('customerName')} />
-
+          <Autocomplete
+            freeSolo
+            options={customerOptions}
+            value={form.customerName ?? ''}
+            onInputChange={(_, newInputValue) => {
+              onChange({ ...form, customerName: newInputValue });
+            }}
+            renderInput={(params) => (
+              <TextField {...params} label="Customer *" placeholder="Search or type a customer name" />
+            )}
+            renderOption={(props, option) => {
+              const customer = customers.find((item) => item.name === option);
+              return (
+                <Box component="li" {...props} key={option}>
+                  <Box>
+                    <Typography variant="body2">{option}</Typography>
+                    {customer ? (
+                      <Typography variant="caption" color="text.secondary">
+                        {[customer.phone, customer.email].filter(Boolean).join(' • ')}
+                      </Typography>
+                    ) : null}
+                  </Box>
+                </Box>
+              );
+            }}
+          />
           <TextField select label="Product *" value={form.productId} onChange={handleProductChange}>
             {products.map((product) => (
               <MenuItem key={product.id} value={String(product.id)}>
@@ -69,6 +100,11 @@ export default function SaleDialog({
               </MenuItem>
             ))}
           </TextField>
+
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+            <TextField label="Product Name" value={selectedProduct?.name ?? ''} fullWidth disabled />
+            <TextField label="SKU" value={selectedProduct?.sku ?? ''} fullWidth disabled />
+          </Stack>
 
           <TextField label="Category" value={selectedProduct?.categoryName ?? form.categoryName ?? ''} disabled />
 
@@ -79,6 +115,9 @@ export default function SaleDialog({
               value={form.quantity}
               onChange={updateField('quantity')}
               fullWidth
+              error={Boolean(quantityError)}
+              helperText={quantityError || ' '}
+              inputProps={{ min: 1, max: selectedProduct ? Number(selectedProduct.stockQuantity ?? 0) : undefined }}
             />
             <TextField
               label="Unit Price *"
@@ -123,18 +162,53 @@ export default function SaleDialog({
             </TextField>
           </Stack>
 
-          <Box>
-            <Typography variant="body2" color="text.secondary">
-              Total Amount
+          <TextField select label="Payment Status *" value={form.paymentStatus ?? 'Paid'} onChange={updateField('paymentStatus')} fullWidth>
+            <MenuItem value="Paid">Paid</MenuItem>
+            <MenuItem value="Pending">Pending</MenuItem>
+            <MenuItem value="Partial">Partially Paid</MenuItem>
+            <MenuItem value="Refunded">Refunded</MenuItem>
+            <MenuItem value="Cancelled">Cancelled</MenuItem>
+          </TextField>
+
+          <TextField
+            label="Notes"
+            multiline
+            minRows={2}
+            value={form.notes ?? ''}
+            onChange={updateField('notes')}
+            placeholder="Optional notes for this sale"
+          />
+
+          <Box sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+            <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+              Billing Summary
             </Typography>
-            <Typography variant="h6">{new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(totalAmount)}</Typography>
+            <Stack spacing={1}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                <Typography variant="body2">Subtotal</Typography>
+                <Typography variant="body2">{formatCurrency(billing.subtotal)}</Typography>
+              </Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                <Typography variant="body2">Discount</Typography>
+                <Typography variant="body2">- {formatCurrency(billing.discount)}</Typography>
+              </Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                <Typography variant="body2">Tax</Typography>
+                <Typography variant="body2">{formatCurrency(billing.tax)}</Typography>
+              </Box>
+              <Divider />
+              <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                <Typography variant="subtitle1" fontWeight={700}>Grand Total</Typography>
+                <Typography variant="subtitle1" fontWeight={700}>{formatCurrency(billing.total)}</Typography>
+              </Box>
+            </Stack>
           </Box>
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" onClick={onSubmit} disabled={submitDisabled}>
-          {editingTransactionId ? 'Save' : 'Save Sale'}
+        <Button onClick={onClose} disabled={submitting}>Cancel</Button>
+        <Button variant="contained" onClick={onSubmit} disabled={submitDisabled || submitting}>
+          {submitting ? 'Saving...' : editingTransactionId ? 'Save' : 'Save Sale'}
         </Button>
       </DialogActions>
     </Dialog>

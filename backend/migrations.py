@@ -202,6 +202,10 @@ def ensure_schema() -> None:
         # sales
         if "invoiceNumber" not in sales_tx_columns:
             connection.execute(text("ALTER TABLE sales ADD COLUMN invoiceNumber VARCHAR"))
+        if "customerId" not in sales_tx_columns:
+            connection.execute(text("ALTER TABLE sales ADD COLUMN customerId INTEGER"))
+        if "status" not in sales_tx_columns:
+            connection.execute(text("ALTER TABLE sales ADD COLUMN status VARCHAR DEFAULT 'completed'"))
         if "customerName" not in sales_tx_columns:
             connection.execute(text("ALTER TABLE sales ADD COLUMN customerName VARCHAR"))
         if "saleDate" not in sales_tx_columns:
@@ -210,6 +214,10 @@ def ensure_schema() -> None:
             connection.execute(text("ALTER TABLE sales ADD COLUMN salesChannel VARCHAR"))
         if "paymentMethod" not in sales_tx_columns:
             connection.execute(text("ALTER TABLE sales ADD COLUMN paymentMethod VARCHAR"))
+        if "paymentStatus" not in sales_tx_columns:
+            connection.execute(text("ALTER TABLE sales ADD COLUMN paymentStatus VARCHAR DEFAULT 'Paid'"))
+        if "notes" not in sales_tx_columns:
+            connection.execute(text("ALTER TABLE sales ADD COLUMN notes VARCHAR"))
         if "subtotalAmount" not in sales_tx_columns:
             connection.execute(text("ALTER TABLE sales ADD COLUMN subtotalAmount FLOAT DEFAULT 0"))
         if "discountAmount" not in sales_tx_columns:
@@ -218,6 +226,30 @@ def ensure_schema() -> None:
             connection.execute(text("ALTER TABLE sales ADD COLUMN taxAmount FLOAT DEFAULT 0"))
         if "updatedAt" not in sales_tx_columns:
             connection.execute(text("ALTER TABLE sales ADD COLUMN updatedAt DATETIME"))
+
+        # stock movements history
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS stock_movements (
+                id INTEGER PRIMARY KEY,
+                companyId INTEGER,
+                productId INTEGER,
+                productName VARCHAR,
+                sku VARCHAR,
+                movementType VARCHAR,
+                previousQuantity INTEGER,
+                updatedQuantity INTEGER,
+                quantityChanged INTEGER,
+                reference VARCHAR,
+                saleId INTEGER,
+                actor VARCHAR,
+                actorUserId INTEGER,
+                createdAt DATETIME
+            )
+        """))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_stock_movements_companyId ON stock_movements(companyId)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_stock_movements_productId ON stock_movements(productId)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_stock_movements_movementType ON stock_movements(movementType)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_stock_movements_saleId ON stock_movements(saleId)"))
 
         # sale_items
         if "categoryId" not in sales_line_columns:

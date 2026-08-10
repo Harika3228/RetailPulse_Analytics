@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext.tsx';
 import AdminLayout from './AdminLayout.tsx';
 import { apiRequest, formatCurrency } from './adminShared.js';
-import { formatSaleDatetime } from './salesShared.js';
+import { formatSaleDatetime, saleNumberOfItems } from './salesShared.js';
 
 export default function SalesDashboardPage() {
   const { token } = useAuth();
@@ -92,6 +92,7 @@ export default function SalesDashboardPage() {
                   </Box>
                   <Box>
                     <Typography variant="body2">{sale.salesChannel} • {sale.paymentMethod}</Typography>
+                    <Typography variant="body2">Items: {saleNumberOfItems(sale)}</Typography>
                     <Typography variant="subtitle1" fontWeight={700}>{formatCurrency(sale.totalAmount)}</Typography>
                   </Box>
                   <Stack direction="row" spacing={1}>
