@@ -1,48 +1,41 @@
-import { Alert, Box, Button, Card, CircularProgress, MenuItem, Select, Stack, TextField, Typography } from '@mui/material';
+import { Box, Button, Card, MenuItem, Select, Stack, TextField, Typography } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../auth/AuthContext.tsx';
+import { EmptyState } from '../../components/admin/EmptyStates.tsx';
+import { ChartSkeleton, KpiValueSkeleton, PanelListSkeleton } from '../../components/admin/LoadingStates.tsx';
 import AdminLayout from './AdminLayout.tsx';
-import { apiRequest, formatCurrency, getApiBase } from './adminShared';
+import ErrorBanner from '../../components/admin/ErrorBanner.tsx';
+import { formatCurrency, getApiBase, getErrorMessage } from './adminShared';
+import { queryKeys, useApiQuery } from '../../lib/queryHooks';
 
 export default function ForecastingPage() {
   const { token } = useAuth();
-  const [summary, setSummary] = useState<Record<string, any> | null>(null);
-  const [products, setProducts] = useState<Array<Record<string, any>>>([]);
-  const [categories, setCategories] = useState<Array<Record<string, any>>>([]);
-  const [accuracy, setAccuracy] = useState<Record<string, any> | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
-  const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState('30d');
   const [productSearch, setProductSearch] = useState('');
   const [categorySearch, setCategorySearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [exporting, setExporting] = useState<'demand' | 'products' | 'categories' | null>(null);
- 
+
+  const summaryQuery = useApiQuery<Record<string, any> | null>(queryKeys.forecasting.summary(period), `/forecasting?period=${period}`, token);
+  const productsQuery = useApiQuery<Array<Record<string, any>>>(queryKeys.forecasting.products(period), `/forecasting/products?period=${period}`, token);
+  const categoriesQuery = useApiQuery<Array<Record<string, any>>>(queryKeys.forecasting.categories(period), `/forecasting/categories?period=${period}`, token);
+  const accuracyQuery = useApiQuery<Record<string, any> | null>(queryKeys.forecasting.accuracy, '/forecasting/accuracy', token);
+
+  const summary = summaryQuery.data ?? null;
+  const products = productsQuery.data ?? [];
+  const categories = categoriesQuery.data ?? [];
+  const accuracy = accuracyQuery.data ?? null;
+  const summaryLoading = summaryQuery.isLoading;
+  const productsLoading = productsQuery.isLoading;
+  const categoriesLoading = categoriesQuery.isLoading;
+
   useEffect(() => {
-    async function loadForecasting() {
-      if (!token) {
-        return;
-      }
-      setLoading(true);
-      try {
-        const [summaryPayload, productsPayload, categoriesPayload, accuracyPayload] = await Promise.all([
-          apiRequest(`/forecasting?period=${period}`, token),
-          apiRequest(`/forecasting/products?period=${period}`, token),
-          apiRequest(`/forecasting/categories?period=${period}`, token),
-          apiRequest('/forecasting/accuracy', token),
-        ]);
-        setSummary(summaryPayload);
-        setProducts(productsPayload);
-        setCategories(categoriesPayload);
-        setAccuracy(accuracyPayload);
-      } catch (error) {
-        setErrorMessage(error instanceof Error ? error.message : 'Unable to load forecasting data');
-      } finally {
-        setLoading(false);
-      }
+    const error = summaryQuery.error ?? productsQuery.error ?? categoriesQuery.error ?? accuracyQuery.error;
+    if (error) {
+      setErrorMessage(getErrorMessage(error, 'Unable to load forecast data'));
     }
-    void loadForecasting();
-  }, [period, token]);
+  }, [summaryQuery.error, productsQuery.error, categoriesQuery.error, accuracyQuery.error]);
 
   const kpis = useMemo(() => [
     { label: 'Total Predicted Demand', value: formatCurrency(summary?.forecastedDemand ?? 0) },
@@ -51,6 +44,8 @@ export default function ForecastingPage() {
     { label: 'Slow Moving Products', value: products.filter((item) => (item.historicalDemand ?? 0) <= 1).length.toString() },
     { label: 'Forecast Accuracy', value: `${accuracy?.accuracy ?? 0}%` },
   ], [accuracy, products, summary]);
+
+  const kpiLoading = summaryLoading || productsLoading || accuracyQuery.isLoading;
 
   const categoryOptions = useMemo(() => {
     const options = Array.from(new Set((products ?? []).map((product) => product.categoryName || 'Uncategorized').filter(Boolean))) as string[];
@@ -128,7 +123,7 @@ export default function ForecastingPage() {
       anchor.remove();
       URL.revokeObjectURL(url);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Unable to export report');
+      setErrorMessage(getErrorMessage(error, 'Unable to export report'));
     } finally {
       setExporting(null);
     }
@@ -148,7 +143,7 @@ export default function ForecastingPage() {
           <MenuItem value="custom">Custom Date Range</MenuItem>
         </Select>
       </Stack>
-      {errorMessage ? <Alert severity="error">{errorMessage}</Alert> : null}
+      <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage('')} />
       <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mb: 2, alignItems: { xs: 'stretch', md: 'center' } }}>
         <TextField
           size="small"
@@ -191,37 +186,51 @@ export default function ForecastingPage() {
           </Button>
         </Stack>
       </Stack>
-      {loading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-          <CircularProgress />
-        </Box>
-      ) : (
-        <Stack spacing={3}>
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 2 }}>
-            {kpis.map((item) => (
-              <Card key={item.label} sx={{ p: 2 }}>
-                <Typography variant="body2" color="text.secondary">{item.label}</Typography>
+      <Stack spacing={3}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 2 }}>
+          {kpis.map((item) => (
+            <Card key={item.label} sx={{ p: 2 }}>
+              <Typography variant="body2" color="text.secondary">{item.label}</Typography>
+              {kpiLoading ? (
+                <KpiValueSkeleton width="55%" />
+              ) : (
                 <Typography variant="h5" sx={{ mt: 1 }}>{item.value}</Typography>
-              </Card>
-            ))}
-          </Box>
+              )}
+            </Card>
+          ))}
+        </Box>
 
+        <Card sx={{ p: 2 }}>
+          <Typography variant="h6">Forecast Horizon</Typography>
+          {summaryLoading ? (
+            <ChartSkeleton height={160} />
+          ) : (summary?.forecastPoints ?? []).length ? (
+            <>
+              <Typography color="text.secondary" sx={{ mt: 0.5 }}>{summary?.forecastPeriod ?? 'Next 30 Days'} • {summary?.forecastWindowDays ?? 30} day window</Typography>
+              <Box sx={{ mt: 2, display: 'grid', gap: 1 }}>
+                {(summary?.forecastPoints ?? []).map((point: Record<string, any>) => (
+                  <Box key={point.month} sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #e5e7eb', pb: 1 }}>
+                    <Typography>{point.month}</Typography>
+                    <Typography color="text.secondary">Historical {formatCurrency(point.historical)} • Forecast {formatCurrency(point.forecast)}</Typography>
+                  </Box>
+                ))}
+              </Box>
+            </>
+          ) : (
+            <EmptyState
+              compact
+              title="No forecast data"
+              message="No sales history is available for the selected period, so a forecast could not be generated."
+            />
+          )}
+        </Card>
+
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 2 }}>
           <Card sx={{ p: 2 }}>
-            <Typography variant="h6">Forecast Horizon</Typography>
-            <Typography color="text.secondary" sx={{ mt: 0.5 }}>{summary?.forecastPeriod ?? 'Next 30 Days'} • {summary?.forecastWindowDays ?? 30} day window</Typography>
-            <Box sx={{ mt: 2, display: 'grid', gap: 1 }}>
-              {(summary?.forecastPoints ?? []).map((point: Record<string, any>) => (
-                <Box key={point.month} sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #e5e7eb', pb: 1 }}>
-                  <Typography>{point.month}</Typography>
-                  <Typography color="text.secondary">Historical {formatCurrency(point.historical)} • Forecast {formatCurrency(point.forecast)}</Typography>
-                </Box>
-              ))}
-            </Box>
-          </Card>
-
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 2 }}>
-            <Card sx={{ p: 2 }}>
-              <Typography variant="h6">Historical Sales vs Forecast</Typography>
+            <Typography variant="h6">Historical Sales vs Forecast</Typography>
+            {summaryLoading ? (
+              <ChartSkeleton height={180} />
+            ) : chartSeries.length ? (
               <svg viewBox="0 0 100 100" width="100%" height="180" style={{ marginTop: 12 }}>
                 <line x1="5" y1="95" x2="95" y2="95" stroke="#CBD5E1" strokeWidth="1" />
                 <line x1="5" y1="5" x2="5" y2="95" stroke="#CBD5E1" strokeWidth="1" />
@@ -234,38 +243,59 @@ export default function ForecastingPage() {
                 <polyline fill="none" stroke="#2563EB" strokeWidth="1.8" points={chartSeries.map((point) => `${point.x},${point.historicalY}`).join(' ')} />
                 <polyline fill="none" stroke="#14B8A6" strokeWidth="1.8" points={chartSeries.map((point) => `${point.x},${point.forecastY}`).join(' ')} />
               </svg>
-            </Card>
+            ) : (
+              <EmptyState compact title="No trend data" message="No sales history is available for the selected period." />
+            )}
+          </Card>
 
-            <Card sx={{ p: 2 }}>
-              <Typography variant="h6">Product Demand Trend</Typography>
+          <Card sx={{ p: 2 }}>
+            <Typography variant="h6">Product Demand Trend</Typography>
+            {productsLoading ? (
+              <ChartSkeleton height={180} />
+            ) : productTrendPoints.length ? (
               <svg viewBox="0 0 100 100" width="100%" height="180" style={{ marginTop: 12 }}>
                 <line x1="5" y1="95" x2="95" y2="95" stroke="#CBD5E1" strokeWidth="1" />
                 <line x1="5" y1="5" x2="5" y2="95" stroke="#CBD5E1" strokeWidth="1" />
                 <polyline fill="none" stroke="#8B5CF6" strokeWidth="1.8" points={productTrendPoints.map((point) => `${point.x},${point.y}`).join(' ')} />
                 {productTrendPoints.map((point) => <circle key={point.label} cx={point.x} cy={point.y} r="1.8" fill="#8B5CF6" />)}
               </svg>
-            </Card>
+            ) : (
+              <EmptyState compact title="No product demand data" message="No product forecasts are available for the selected period." />
+            )}
+          </Card>
 
-            <Card sx={{ p: 2 }}>
-              <Typography variant="h6">Category Demand Trend</Typography>
+          <Card sx={{ p: 2 }}>
+            <Typography variant="h6">Category Demand Trend</Typography>
+            {categoriesLoading ? (
+              <ChartSkeleton height={180} />
+            ) : categoryTrendPoints.length ? (
               <svg viewBox="0 0 100 100" width="100%" height="180" style={{ marginTop: 12 }}>
                 <line x1="5" y1="95" x2="95" y2="95" stroke="#CBD5E1" strokeWidth="1" />
                 <line x1="5" y1="5" x2="5" y2="95" stroke="#CBD5E1" strokeWidth="1" />
                 <polyline fill="none" stroke="#F59E0B" strokeWidth="1.8" points={categoryTrendPoints.map((point) => `${point.x},${point.y}`).join(' ')} />
                 {categoryTrendPoints.map((point) => <circle key={point.label} cx={point.x} cy={point.y} r="1.8" fill="#F59E0B" />)}
               </svg>
-            </Card>
+            ) : (
+              <EmptyState compact title="No category demand data" message="No category forecasts are available for the selected period." />
+            )}
+          </Card>
 
             <Card sx={{ p: 2 }}>
               <Typography variant="h6">Top Predicted Products</Typography>
-              <Stack spacing={1} sx={{ mt: 1.5 }}>
-                {filteredProducts.slice(0, 5).map((product) => (
-                  <Box key={product.id} sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <Typography variant="body2">{product.name}</Typography>
-                    <Typography variant="body2" color="text.secondary">{formatCurrency(product.forecastedDemand)}</Typography>
-                  </Box>
-                ))}
-              </Stack>
+              {productsLoading ? (
+                <PanelListSkeleton rows={5} />
+              ) : filteredProducts.slice(0, 5).length ? (
+                <Stack spacing={1} sx={{ mt: 1.5 }}>
+                  {filteredProducts.slice(0, 5).map((product) => (
+                    <Box key={product.id} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <Typography variant="body2">{product.name}</Typography>
+                      <Typography variant="body2" color="text.secondary">{formatCurrency(product.forecastedDemand)}</Typography>
+                    </Box>
+                  ))}
+                </Stack>
+              ) : (
+                <EmptyState compact title="No predicted products" message="No product forecasts are available for the selected filters." />
+              )}
             </Card>
 
             <Card sx={{ p: 2 }}>
@@ -286,43 +316,54 @@ export default function ForecastingPage() {
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 2 }}>
             <Card sx={{ p: 2 }}>
               <Typography variant="h6">Top Product Forecasts</Typography>
-              <Stack spacing={1.5} sx={{ mt: 2 }}>
-                {filteredProducts.slice(0, 6).map((product) => (
-                  <Box key={product.id} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2 }}>
-                    <Box>
-                      <Typography>{product.name}</Typography>
-                      <Typography variant="body2" color="text.secondary">{product.categoryName}</Typography>
-                      <Typography variant="caption" color="text.secondary">Stock {product.currentStock ?? 0} • Confidence {(product.confidenceLevel ?? 0).toFixed(1)}%</Typography>
+              {productsLoading ? (
+                <PanelListSkeleton rows={6} />
+              ) : filteredProducts.length ? (
+                <Stack spacing={1.5} sx={{ mt: 2 }}>
+                  {filteredProducts.slice(0, 6).map((product) => (
+                    <Box key={product.id} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2 }}>
+                      <Box>
+                        <Typography>{product.name}</Typography>
+                        <Typography variant="body2" color="text.secondary">{product.categoryName}</Typography>
+                        <Typography variant="caption" color="text.secondary">Stock {product.currentStock ?? 0} • Confidence {(product.confidenceLevel ?? 0).toFixed(1)}%</Typography>
+                      </Box>
+                      <Box sx={{ textAlign: 'right' }}>
+                        <Typography variant="body2">{formatCurrency(product.forecastedDemand)}</Typography>
+                        <Typography variant="caption" color="text.secondary">Historical {product.historicalDemand ?? 0}</Typography>
+                      </Box>
                     </Box>
-                    <Box sx={{ textAlign: 'right' }}>
-                      <Typography variant="body2">{formatCurrency(product.forecastedDemand)}</Typography>
-                      <Typography variant="caption" color="text.secondary">Historical {product.historicalDemand ?? 0}</Typography>
-                    </Box>
-                  </Box>
-                ))}
-              </Stack>
+                  ))}
+                </Stack>
+              ) : (
+                <EmptyState compact title="No product forecasts" message="No product forecasts are available for the selected period." />
+              )}
             </Card>
 
             <Card sx={{ p: 2 }}>
               <Typography variant="h6">Category Forecasts</Typography>
-              <Stack spacing={1.5} sx={{ mt: 2 }}>
-                {filteredCategories.slice(0, 6).map((category) => (
-                  <Box key={category.name} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2 }}>
-                    <Box>
-                      <Typography>{category.name}</Typography>
-                      <Typography variant="body2" color="text.secondary">Historical {formatCurrency(category.totalHistoricalSales ?? 0)}</Typography>
+              {categoriesLoading ? (
+                <PanelListSkeleton rows={6} />
+              ) : filteredCategories.length ? (
+                <Stack spacing={1.5} sx={{ mt: 2 }}>
+                  {filteredCategories.slice(0, 6).map((category) => (
+                    <Box key={category.name} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2 }}>
+                      <Box>
+                        <Typography>{category.name}</Typography>
+                        <Typography variant="body2" color="text.secondary">Historical {formatCurrency(category.totalHistoricalSales ?? 0)}</Typography>
+                      </Box>
+                      <Box sx={{ textAlign: 'right' }}>
+                        <Typography variant="body2">{formatCurrency(category.predictedDemand ?? 0)}</Typography>
+                        <Typography variant="caption" color="text.secondary">Growth {category.expectedGrowthPercentage ?? 0}%</Typography>
+                      </Box>
                     </Box>
-                    <Box sx={{ textAlign: 'right' }}>
-                      <Typography variant="body2">{formatCurrency(category.predictedDemand ?? 0)}</Typography>
-                      <Typography variant="caption" color="text.secondary">Growth {category.expectedGrowthPercentage ?? 0}%</Typography>
-                    </Box>
-                  </Box>
-                ))}
-              </Stack>
+                  ))}
+                </Stack>
+              ) : (
+                <EmptyState compact title="No category forecasts" message="No category forecasts are available for the selected period." />
+              )}
             </Card>
           </Box>
         </Stack>
-      )}
     </AdminLayout>
   );
 }

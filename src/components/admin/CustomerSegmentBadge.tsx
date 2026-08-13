@@ -7,7 +7,7 @@ const segmentConfig = {
   vip_customer: { label: 'VIP', background: '#7c3aed' },
 };
 
-export default function CustomerSegmentBadge({ segment, size = 'small' }) {
+export default function CustomerSegmentBadge({ segment, size = 'small' }: { segment?: string; size?: 'small' | 'medium' }) {
   const config = segmentConfig[segment] || segmentConfig.new_customer;
   return (
     <Chip

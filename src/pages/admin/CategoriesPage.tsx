@@ -1,5 +1,4 @@
 import {
-  Alert,
   Box,
   Button,
   Card,
@@ -13,10 +12,13 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext.tsx';
 import AdminLayout from './AdminLayout.tsx';
-import { apiRequest } from './adminShared.js';
+import ErrorBanner from '../../components/admin/ErrorBanner.tsx';
+import { apiRequest, getErrorMessage } from './adminShared.js';
+import { queryKeys, useApiQuery, useDebouncedValue } from '../../lib/queryHooks';
 import CategoryDialog from '../../components/admin/CategoryDialog.tsx';
 import ConfirmDeleteDialog from '../../components/admin/ConfirmDeleteDialog.tsx';
 
@@ -28,8 +30,8 @@ const defaultCategoryForm = {
 
 export default function CategoriesPage() {
   const { token } = useAuth();
+  const queryClient = useQueryClient();
   const [errorMessage, setErrorMessage] = useState('');
-  const [categories, setCategories] = useState([]);
   const [categoryQuery, setCategoryQuery] = useState('');
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
   const [categoryDeleteDialogOpen, setCategoryDeleteDialogOpen] = useState(false);
@@ -38,27 +40,34 @@ export default function CategoriesPage() {
   const [editingCategoryId, setEditingCategoryId] = useState(null);
   const [deletingCategory, setDeletingCategory] = useState(null);
 
-  const loadCategories = useCallback(async () => {
-    if (!token) {
-      return;
-    }
+  const debouncedCategoryQuery = useDebouncedValue(categoryQuery);
 
+  const categoryParams = useMemo(() => {
     const params = new URLSearchParams();
-    if (categoryQuery.trim()) {
-      params.set('q', categoryQuery.trim());
+    if (debouncedCategoryQuery.trim()) {
+      params.set('q', debouncedCategoryQuery.trim());
     }
+    return params.toString();
+  }, [debouncedCategoryQuery]);
 
-    try {
-      const payload = await apiRequest(`/categories${params.toString() ? `?${params.toString()}` : ''}`, token);
-      setCategories(payload);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to load categories');
-    }
-  }, [token, categoryQuery]);
+  const categoriesQuery = useApiQuery<Array<Record<string, any>>>(
+    queryKeys.categories.list(categoryParams),
+    `/categories${categoryParams ? `?${categoryParams}` : ''}`,
+    token,
+  );
+  const categories = categoriesQuery.data ?? [];
 
   useEffect(() => {
-    loadCategories();
-  }, [loadCategories]);
+    if (categoriesQuery.error) {
+      setErrorMessage(getErrorMessage(categoriesQuery.error, 'Failed to load categories'));
+    }
+  }, [categoriesQuery.error]);
+
+  const invalidateCategories = () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.categories.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.products.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.inventory.all });
+  };
 
   const openAddCategory = () => {
     setCategoryForm(defaultCategoryForm);
@@ -102,9 +111,9 @@ export default function CategoriesPage() {
       }
 
       setCategoryDialogOpen(false);
-      await loadCategories();
+      invalidateCategories();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to save category';
+      const message = getErrorMessage(error, 'Unable to save category');
       if (message.toLowerCase().includes('already exists')) {
         setCategoryFormError('Duplicate category not allowed');
       } else {
@@ -126,17 +135,17 @@ export default function CategoriesPage() {
       await apiRequest(`/categories/${deletingCategory.id}`, token, { method: 'DELETE' });
       setCategoryDeleteDialogOpen(false);
       setDeletingCategory(null);
-      await loadCategories();
+      invalidateCategories();
     } catch (error) {
       setCategoryDeleteDialogOpen(false);
       setDeletingCategory(null);
-      setErrorMessage(error instanceof Error ? error.message : 'Unable to delete category');
+      setErrorMessage(getErrorMessage(error, 'Unable to delete category'));
     }
   };
 
   return (
     <AdminLayout>
-      {errorMessage ? <Alert severity="error">{errorMessage}</Alert> : null}
+      <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage('')} />
       <Card className="dashboard-content__table-card">
         <Box className="dashboard-content__header">
           <Typography className="dashboard-content__title dashboard-content__title--dark">Categories</Typography>
@@ -152,7 +161,7 @@ export default function CategoriesPage() {
             onChange={(event) => setCategoryQuery(event.target.value)}
             size="small"
           />
-          <Button variant="outlined" onClick={loadCategories}>
+          <Button variant="outlined" onClick={() => { void categoriesQuery.refetch(); }}>
             Search
           </Button>
         </Box>
@@ -168,24 +177,42 @@ export default function CategoriesPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {categories.map((category) => (
-                <TableRow key={category.id}>
-                  <TableCell>{category.name}</TableCell>
-                  <TableCell>{category.description}</TableCell>
-                  <TableCell>{category.productCount}</TableCell>
-                  <TableCell>{category.status === 'active' ? 'Active' : 'Inactive'}</TableCell>
-                  <TableCell>
-                    <Stack direction="row" spacing={1}>
-                      <Button size="small" onClick={() => openEditCategory(category)}>
-                        Edit
-                      </Button>
-                      <Button size="small" color="error" onClick={() => confirmDeleteCategory(category)}>
-                        Delete
-                      </Button>
-                    </Stack>
+              {categoriesQuery.isLoading ? (
+                Array.from({ length: 4 }).map((_, index) => (
+                  <TableRow key={`skeleton-${index}`}>
+                    {Array.from({ length: 5 }).map((__, colIndex) => (
+                      <TableCell key={`skeleton-${index}-${colIndex}`}>
+                        <Typography variant="body2" color="text.secondary">…</Typography>
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : categories.length ? (
+                categories.map((category) => (
+                  <TableRow key={category.id}>
+                    <TableCell>{category.name}</TableCell>
+                    <TableCell>{category.description}</TableCell>
+                    <TableCell>{category.productCount}</TableCell>
+                    <TableCell>{category.status === 'active' ? 'Active' : 'Inactive'}</TableCell>
+                    <TableCell>
+                      <Stack direction="row" spacing={1}>
+                        <Button size="small" onClick={() => openEditCategory(category)}>
+                          Edit
+                        </Button>
+                        <Button size="small" color="error" onClick={() => confirmDeleteCategory(category)}>
+                          Delete
+                        </Button>
+                      </Stack>
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={5} sx={{ textAlign: 'center', py: 4 }}>
+                    No categories yet. Create your first category to get started.
                   </TableCell>
                 </TableRow>
-              ))}
+              )}
             </TableBody>
           </Table>
         </TableContainer>

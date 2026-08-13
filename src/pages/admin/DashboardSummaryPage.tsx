@@ -1,8 +1,12 @@
-import { Alert, Box, Button, Card, MenuItem, Select, TextField, Typography } from '@mui/material';
+import { Box, Button, Card, MenuItem, Select, TextField, Typography } from '@mui/material';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../auth/AuthContext.tsx';
+import { NoSalesDataNotice } from '../../components/admin/EmptyStates.tsx';
+import { KpiValueSkeleton, PanelListSkeleton } from '../../components/admin/LoadingStates.tsx';
 import AdminLayout from './AdminLayout.tsx';
-import { apiRequest, getApiBase, normalizeRole } from './adminShared.js';
+import ErrorBanner from '../../components/admin/ErrorBanner.tsx';
+import { getApiBase, getDateRangeError, getErrorMessage, isDateRangeInvalid, normalizeRole } from './adminShared.js';
+import { queryKeys, useApiQuery } from '../../lib/queryHooks';
 
 type TrendPoint = { label: string; value: number };
 type AnalyticsPayload = {
@@ -37,25 +41,54 @@ const currencyFormatter = new Intl.NumberFormat('en-IN', {
   maximumFractionDigits: 2,
 });
 
-function renderTrendSection(title: string, data: TrendPoint[]) {
-  if (!data?.length) {
-    return <Typography color="text.secondary">No trend data available for the selected filters.</Typography>;
-  }
-  const maxValue = Math.max(1, ...data.map((entry) => entry.value));
+const emptyAnalyticsDefaults: AnalyticsPayload = {
+  totalRevenue: 0,
+  totalOrders: 0,
+  totalProductsSold: 0,
+  averageOrderValue: 0,
+  totalInventoryValue: 0,
+  lowStockProducts: 0,
+  outOfStockProducts: 0,
+  totalCategories: 0,
+  revenueTrend: { daily: [], weekly: [], monthly: [] },
+  salesTrend: { daily: [], weekly: [], monthly: [] },
+  topSellingProducts: [],
+  topPerformingCategories: [],
+  salesByPaymentMethod: [],
+  salesBySalesChannel: [],
+  inventoryDistributionByCategory: [],
+  stockStatusSummary: { inStock: 0, lowStock: 0, outOfStock: 0 },
+  topLowStockProducts: [],
+  outOfStockProductDetails: [],
+  inventoryValueByCategory: [],
+  topCustomersByRevenue: [],
+  recentCustomers: [],
+  customerGrowthTrend: [],
+  customerRevenueContribution: [],
+};
+
+function renderTrendSection(title: string, data: TrendPoint[], loading: boolean) {
+  const maxValue = Math.max(1, ...(data ?? []).map((entry) => entry.value));
   return (
     <Box sx={{ display: 'grid', gap: 1.5 }}>
       <Typography variant="subtitle1" fontWeight={600}>{title}</Typography>
-      {data.map((entry) => (
-        <Box key={entry.label}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-            <Typography variant="body2">{entry.label}</Typography>
-            <Typography variant="body2" color="text.secondary">{currencyFormatter.format(entry.value)}</Typography>
+      {loading ? (
+        <PanelListSkeleton rows={4} />
+      ) : !data?.length ? (
+        <Typography color="text.secondary">No trend data available for the selected filters.</Typography>
+      ) : (
+        data.map((entry) => (
+          <Box key={entry.label}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+              <Typography variant="body2">{entry.label}</Typography>
+              <Typography variant="body2" color="text.secondary">{currencyFormatter.format(entry.value)}</Typography>
+            </Box>
+            <Box sx={{ height: 8, borderRadius: 999, bgcolor: '#eef2ff', overflow: 'hidden' }}>
+              <Box sx={{ height: '100%', width: `${(entry.value / maxValue) * 100}%`, bgcolor: '#4f46e5', borderRadius: 999 }} />
+            </Box>
           </Box>
-          <Box sx={{ height: 8, borderRadius: 999, bgcolor: '#eef2ff', overflow: 'hidden' }}>
-            <Box sx={{ height: '100%', width: `${(entry.value / maxValue) * 100}%`, bgcolor: '#4f46e5', borderRadius: 999 }} />
-          </Box>
-        </Box>
-      ))}
+        ))
+      )}
     </Box>
   );
 }
@@ -63,7 +96,8 @@ function renderTrendSection(title: string, data: TrendPoint[]) {
 export default function DashboardSummaryPage() {
   const { user, token } = useAuth();
   const [errorMessage, setErrorMessage] = useState('');
-  const [notifications, setNotifications] = useState([]);
+  const [dateRangeError, setDateRangeError] = useState('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [filters, setFilters] = useState({
     dateFrom: '',
     dateTo: '',
@@ -75,51 +109,10 @@ export default function DashboardSummaryPage() {
   });
   const [selectedKpi, setSelectedKpi] = useState<string | null>(null);
   const [drillDownRows, setDrillDownRows] = useState<Array<{ label: string; value: string }>>([]);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [lastUpdatedAt, setLastUpdatedAt] = useState('');
-  const [productCatalog, setProductCatalog] = useState<Array<{ id: number; name: string; brand: string; categoryId?: number; categoryName?: string }>>([]);
-  const [categoryCatalog, setCategoryCatalog] = useState<Array<{ id: number; name: string }>>([]);
-  const [salesSummary, setSalesSummary] = useState({
-    totalSales: 0,
-    totalRevenue: 0,
-    totalOrders: 0,
-    averageOrderValue: 0,
-  });
-  const [summary, setSummary] = useState({
-    totalProducts: 0,
-    activeProducts: 0,
-    inactiveProducts: 0,
-    totalCategories: 0,
-  });
-  const [analyticsSummary, setAnalyticsSummary] = useState<AnalyticsPayload>({
-    totalRevenue: 0,
-    totalOrders: 0,
-    totalProductsSold: 0,
-    averageOrderValue: 0,
-    totalInventoryValue: 0,
-    lowStockProducts: 0,
-    outOfStockProducts: 0,
-    totalCategories: 0,
-    revenueTrend: { daily: [], weekly: [], monthly: [] },
-    salesTrend: { daily: [], weekly: [], monthly: [] },
-    topSellingProducts: [],
-    topPerformingCategories: [],
-    salesByPaymentMethod: [],
-    salesBySalesChannel: [],
-    inventoryDistributionByCategory: [],
-    stockStatusSummary: { inStock: 0, lowStock: 0, outOfStock: 0 },
-    topLowStockProducts: [],
-    outOfStockProductDetails: [],
-    inventoryValueByCategory: [],
-    topCustomersByRevenue: [],
-    recentCustomers: [],
-    customerGrowthTrend: [],
-    customerRevenueContribution: [],
-  });
 
   const isCompanyAdmin = ['admin', 'company_admin', 'super_admin'].includes(normalizeRole(user?.role));
 
-  const buildQuery = () => {
+  const buildQuery = useCallback(() => {
     const params = new URLSearchParams();
     if (filters.dateFrom) params.set('dateFrom', filters.dateFrom);
     if (filters.dateTo) params.set('dateTo', filters.dateTo);
@@ -129,62 +122,97 @@ export default function DashboardSummaryPage() {
     if (filters.salesChannel) params.set('salesChannel', filters.salesChannel);
     if (filters.paymentMethod) params.set('paymentMethod', filters.paymentMethod);
     return params.toString();
-  };
+  }, [filters]);
 
-  const loadDashboardData = useCallback(async () => {
-    if (!token) {
-      return;
+  const queryString = useMemo(() => buildQuery(), [buildQuery]);
+  const analyticsEnabled = isCompanyAdmin && !isDateRangeInvalid(filters.dateFrom, filters.dateTo);
+
+  const salesSummaryQuery = useApiQuery<{ totalSales: number; totalRevenue: number; totalOrders: number; averageOrderValue: number }>(
+    queryKeys.dashboard.summary,
+    '/dashboard/sales-summary',
+    token,
+    { refetchInterval: 15000 },
+  );
+  const notificationsQuery = useApiQuery<Array<Record<string, any>>>(
+    queryKeys.notifications.all,
+    '/notifications',
+    token,
+    { refetchInterval: 15000 },
+  );
+  const analyticsQuery = useApiQuery<AnalyticsPayload>(
+    queryKeys.dashboard.analytics(queryString),
+    `/dashboard/analytics${queryString ? `?${queryString}` : ''}`,
+    token,
+    { enabled: Boolean(token) && analyticsEnabled, refetchInterval: analyticsEnabled ? 15000 : false },
+  );
+  const productSummaryQuery = useApiQuery<{ totalProducts: number; activeProducts: number; inactiveProducts: number; totalCategories: number }>(
+    queryKeys.dashboard.productSummary,
+    '/dashboard/product-summary',
+    token,
+    { enabled: Boolean(token) && isCompanyAdmin },
+  );
+  const categoriesQuery = useApiQuery<Array<{ id: number; name: string }>>(
+    queryKeys.categories.list(''),
+    '/categories',
+    token,
+    { enabled: Boolean(token) && isCompanyAdmin },
+  );
+  const productsQuery = useApiQuery<Array<{ id: number; name: string; brand: string; categoryId?: number; categoryName?: string }>>(
+    queryKeys.products.list(''),
+    '/products',
+    token,
+    { enabled: Boolean(token) && isCompanyAdmin },
+  );
+
+  const salesSummary = salesSummaryQuery.data ?? { totalSales: 0, totalRevenue: 0, totalOrders: 0, averageOrderValue: 0 };
+  const notifications = notificationsQuery.data ?? [];
+  const analyticsSummary = useMemo(() => ({ ...emptyAnalyticsDefaults, ...(analyticsQuery.data ?? {}) }), [analyticsQuery.data]);
+  const summary = productSummaryQuery.data ?? { totalProducts: 0, activeProducts: 0, inactiveProducts: 0, totalCategories: 0 };
+  const categoryCatalog = categoriesQuery.data ?? [];
+  const productCatalog = productsQuery.data ?? [];
+
+  const salesSummaryLoading = salesSummaryQuery.isLoading;
+  const notificationsLoading = notificationsQuery.isLoading;
+  const analyticsLoading = analyticsQuery.isLoading;
+
+  const lastUpdatedAt = useMemo(() => {
+    const updatedAt = salesSummaryQuery.dataUpdatedAt;
+    return updatedAt ? new Date(updatedAt).toLocaleString('en-IN') : '';
+  }, [salesSummaryQuery.dataUpdatedAt]);
+
+  useEffect(() => {
+    const error =
+      salesSummaryQuery.error ??
+      notificationsQuery.error ??
+      analyticsQuery.error ??
+      productSummaryQuery.error ??
+      categoriesQuery.error ??
+      productsQuery.error;
+    if (error) {
+      setErrorMessage(getErrorMessage(error, 'Failed to load dashboard data'));
     }
+  }, [
+    salesSummaryQuery.error,
+    notificationsQuery.error,
+    analyticsQuery.error,
+    productSummaryQuery.error,
+    categoriesQuery.error,
+    productsQuery.error,
+  ]);
+
+  const handleManualRefresh = async () => {
     setIsRefreshing(true);
-    try {
-      const salesPayload = await apiRequest('/dashboard/sales-summary', token);
-      setSalesSummary(salesPayload);
-      const notificationPayload = await apiRequest('/notifications', token);
-      setNotifications(notificationPayload);
-      if (isCompanyAdmin) {
-        const queryString = buildQuery();
-        const [productPayload, analyticsPayload, categoriesPayload, productsPayload] = await Promise.all([
-          apiRequest('/dashboard/product-summary', token),
-          apiRequest(`/dashboard/analytics${queryString ? `?${queryString}` : ''}`, token),
-          apiRequest('/categories', token),
-          apiRequest('/products', token),
-        ]);
-        setSummary(productPayload);
-        setAnalyticsSummary(analyticsPayload);
-        setCategoryCatalog(categoriesPayload ?? []);
-        setProductCatalog(productsPayload ?? []);
-      }
-      setLastUpdatedAt(new Date().toLocaleString('en-IN'));
-      setErrorMessage('');
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to load dashboard summary');
-    } finally {
-      setIsRefreshing(false);
-    }
-  }, [token, isCompanyAdmin, filters.dateFrom, filters.dateTo, filters.product, filters.category, filters.brand, filters.salesChannel, filters.paymentMethod]);
-
-  useEffect(() => {
-    void loadDashboardData();
-  }, [loadDashboardData]);
-
-  useEffect(() => {
-    if (!token) {
-      return;
-    }
-    const intervalId = window.setInterval(() => {
-      void loadDashboardData();
-    }, 15000);
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        void loadDashboardData();
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => {
-      window.clearInterval(intervalId);
-      document.removeEventListener('visibilitychange', handleVisibility);
-    };
-  }, [token, loadDashboardData]);
+    setErrorMessage('');
+    await Promise.allSettled([
+      salesSummaryQuery.refetch(),
+      notificationsQuery.refetch(),
+      analyticsQuery.refetch(),
+      productSummaryQuery.refetch(),
+      categoriesQuery.refetch(),
+      productsQuery.refetch(),
+    ]);
+    setIsRefreshing(false);
+  };
 
   const summaryCards = useMemo(
     () => [
@@ -211,7 +239,16 @@ export default function DashboardSummaryPage() {
   );
 
   const handleFilterChange = (field: keyof typeof filters, value: string) => {
-    setFilters((current) => ({ ...current, [field]: value }));
+    const nextFilters = { ...filters, [field]: value };
+    setFilters(nextFilters);
+    setDateRangeError(getDateRangeError(nextFilters.dateFrom, nextFilters.dateTo) ?? '');
+    setSelectedKpi(null);
+    setDrillDownRows([]);
+  };
+
+  const handleResetFilters = () => {
+    setFilters({ dateFrom: '', dateTo: '', product: '', category: '', brand: '', salesChannel: '', paymentMethod: '' });
+    setDateRangeError('');
     setSelectedKpi(null);
     setDrillDownRows([]);
   };
@@ -220,20 +257,28 @@ export default function DashboardSummaryPage() {
     if (!token) {
       return;
     }
-    const queryString = buildQuery();
-    const response = await fetch(`${getApiBase()}/dashboard/export${queryString ? `?format=${format}&${queryString}` : `?format=${format}`}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) {
-      throw new Error('Failed to export dashboard report');
+    if (isDateRangeInvalid(filters.dateFrom, filters.dateTo)) {
+      setErrorMessage(getDateRangeError(filters.dateFrom, filters.dateTo));
+      return;
     }
-    const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `dashboard-report.${format}`;
-    anchor.click();
-    window.URL.revokeObjectURL(url);
+    const queryString = buildQuery();
+    try {
+      const response = await fetch(`${getApiBase()}/dashboard/export${queryString ? `?format=${format}&${queryString}` : `?format=${format}`}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        throw new Error('Failed to export dashboard report');
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `dashboard-report.${format}`;
+      anchor.click();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error, 'Failed to export dashboard report'));
+    }
   };
 
   const handleKpiSelect = (kpi: string) => {
@@ -265,12 +310,16 @@ export default function DashboardSummaryPage() {
 
   return (
     <AdminLayout>
-      {errorMessage ? <Alert severity="error">{errorMessage}</Alert> : null}
+      <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage('')} />
+      <NoSalesDataNotice
+        show={isCompanyAdmin && !analyticsLoading && analyticsSummary.totalOrders === 0}
+        onReset={handleResetFilters}
+      />
       <Card className="dashboard-content__header-card">
         <Typography className="dashboard-content__title">Dashboard</Typography>
         <Typography className="dashboard-content__breadcrumbs">Sales Summary</Typography>
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', mb: 2 }}>
-          <Button variant="outlined" onClick={() => { void loadDashboardData(); }} disabled={isRefreshing}>{isRefreshing ? 'Refreshing…' : 'Refresh'}</Button>
+          <Button variant="outlined" onClick={() => { void handleManualRefresh(); }} disabled={isRefreshing}>{isRefreshing ? 'Refreshing…' : 'Refresh'}</Button>
           <Button variant="outlined" onClick={() => { void handleExport('csv'); }}>Export CSV</Button>
           <Button variant="outlined" onClick={() => { void handleExport('pdf'); }}>Export PDF</Button>
           <Typography variant="body2" color="text.secondary">{lastUpdatedAt ? `Last updated: ${lastUpdatedAt}` : 'Awaiting refresh'}</Typography>
@@ -279,7 +328,11 @@ export default function DashboardSummaryPage() {
           {summaryCards.map((card) => (
             <Card key={card.label} className="dashboard-summary-card">
               <Typography className="dashboard-summary-card__label">{card.label}</Typography>
-              <Typography className="dashboard-summary-card__value">{card.value}</Typography>
+              {salesSummaryLoading ? (
+                <KpiValueSkeleton light />
+              ) : (
+                <Typography className="dashboard-summary-card__value">{card.value}</Typography>
+              )}
             </Card>
           ))}
         </Box>
@@ -290,8 +343,8 @@ export default function DashboardSummaryPage() {
             <Typography className="dashboard-content__title dashboard-content__title--dark">Analytics Dashboard</Typography>
             <Box sx={{ display: 'grid', gap: 2, mb: 2 }}>
               <Box sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' } }}>
-                <TextField label="Date From" type="datetime-local" value={filters.dateFrom} onChange={(event) => handleFilterChange('dateFrom', event.target.value)} InputLabelProps={{ shrink: true }} />
-                <TextField label="Date To" type="datetime-local" value={filters.dateTo} onChange={(event) => handleFilterChange('dateTo', event.target.value)} InputLabelProps={{ shrink: true }} />
+                <TextField label="Date From" type="datetime-local" value={filters.dateFrom} onChange={(event) => handleFilterChange('dateFrom', event.target.value)} error={Boolean(dateRangeError)} helperText={dateRangeError} InputLabelProps={{ shrink: true }} />
+                <TextField label="Date To" type="datetime-local" value={filters.dateTo} onChange={(event) => handleFilterChange('dateTo', event.target.value)} error={Boolean(dateRangeError)} helperText={dateRangeError} InputLabelProps={{ shrink: true }} />
                 <Select value={filters.product} onChange={(event) => handleFilterChange('product', event.target.value as string)} displayEmpty>
                   <MenuItem value="">All Products</MenuItem>
                   {productCatalog.map((product) => <MenuItem key={product.id} value={product.name}>{product.name}</MenuItem>)}
@@ -306,7 +359,7 @@ export default function DashboardSummaryPage() {
                 <TextField label="Sales Channel" value={filters.salesChannel} onChange={(event) => handleFilterChange('salesChannel', event.target.value)} />
                 <TextField label="Payment Method" value={filters.paymentMethod} onChange={(event) => handleFilterChange('paymentMethod', event.target.value)} />
               </Box>
-              <Button variant="outlined" onClick={() => { setFilters({ dateFrom: '', dateTo: '', product: '', category: '', brand: '', salesChannel: '', paymentMethod: '' }); setSelectedKpi(null); setDrillDownRows([]); }}>Reset Filters</Button>
+              <Button variant="outlined" onClick={handleResetFilters}>Reset Filters</Button>
             </Box>
             <Box className="dashboard-summary-grid">
               {analyticsCards.map((card) => (
@@ -318,11 +371,15 @@ export default function DashboardSummaryPage() {
                   if (card.label === 'Total Inventory Value') handleKpiSelect('inventory');
                 }} sx={{ cursor: 'pointer' }}>
                   <Typography className="dashboard-summary-card__label">{card.label}</Typography>
-                  <Typography className="dashboard-summary-card__value">{card.value}</Typography>
+                  {analyticsLoading ? (
+                    <KpiValueSkeleton />
+                  ) : (
+                    <Typography className="dashboard-summary-card__value">{card.value}</Typography>
+                  )}
                 </Card>
               ))}
             </Box>
-            {selectedKpi ? (
+            {selectedKpi && !analyticsLoading ? (
               <Box sx={{ mt: 2, border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
                 <Typography variant="subtitle1" fontWeight={600}>Drill-down Details</Typography>
                 <Box sx={{ display: 'grid', gap: 1, mt: 1 }}>
@@ -342,58 +399,74 @@ export default function DashboardSummaryPage() {
             <Box sx={{ display: 'grid', gap: 2.5 }}>
               <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' } }}>
                 <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
-                  {renderTrendSection('Revenue Trend (Daily)', analyticsSummary.revenueTrend.daily)}
+                  {renderTrendSection('Revenue Trend (Daily)', analyticsSummary.revenueTrend.daily, analyticsLoading)}
                 </Box>
                 <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
-                  {renderTrendSection('Sales Trend (Daily)', analyticsSummary.salesTrend.daily)}
+                  {renderTrendSection('Sales Trend (Daily)', analyticsSummary.salesTrend.daily, analyticsLoading)}
                 </Box>
               </Box>
               <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' } }}>
                 <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
                   <Typography variant="subtitle1" fontWeight={600}>Top 10 Best Selling Products</Typography>
-                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
-                    {analyticsSummary.topSellingProducts.length ? analyticsSummary.topSellingProducts.map((product) => (
-                      <Box key={product.name} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Typography variant="body2">{product.name}</Typography>
-                        <Typography variant="body2" color="text.secondary">{product.quantity} sold</Typography>
-                      </Box>
-                    )) : <Typography color="text.secondary">No sales yet for the current filters.</Typography>}
-                  </Box>
+                  {analyticsLoading ? (
+                    <PanelListSkeleton rows={5} />
+                  ) : (
+                    <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                      {analyticsSummary.topSellingProducts.length ? analyticsSummary.topSellingProducts.map((product) => (
+                        <Box key={product.name} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Typography variant="body2">{product.name}</Typography>
+                          <Typography variant="body2" color="text.secondary">{product.quantity} sold</Typography>
+                        </Box>
+                      )) : <Typography color="text.secondary">No sales yet for the current filters.</Typography>}
+                    </Box>
+                  )}
                 </Box>
                 <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
                   <Typography variant="subtitle1" fontWeight={600}>Top Performing Categories</Typography>
-                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
-                    {analyticsSummary.topPerformingCategories.length ? analyticsSummary.topPerformingCategories.map((category) => (
-                      <Box key={category.name} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Typography variant="body2">{category.name}</Typography>
-                        <Typography variant="body2" color="text.secondary">{currencyFormatter.format(category.revenue)}</Typography>
-                      </Box>
-                    )) : <Typography color="text.secondary">No category data yet for the current filters.</Typography>}
-                  </Box>
+                  {analyticsLoading ? (
+                    <PanelListSkeleton rows={5} />
+                  ) : (
+                    <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                      {analyticsSummary.topPerformingCategories.length ? analyticsSummary.topPerformingCategories.map((category) => (
+                        <Box key={category.name} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Typography variant="body2">{category.name}</Typography>
+                          <Typography variant="body2" color="text.secondary">{currencyFormatter.format(category.revenue)}</Typography>
+                        </Box>
+                      )) : <Typography color="text.secondary">No category data yet for the current filters.</Typography>}
+                    </Box>
+                  )}
                 </Box>
               </Box>
               <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' } }}>
                 <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
                   <Typography variant="subtitle1" fontWeight={600}>Sales by Payment Method</Typography>
-                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
-                    {analyticsSummary.salesByPaymentMethod.length ? analyticsSummary.salesByPaymentMethod.map((entry) => (
-                      <Box key={entry.label} sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <Typography variant="body2">{entry.label}</Typography>
-                        <Typography variant="body2" color="text.secondary">{currencyFormatter.format(entry.value)}</Typography>
-                      </Box>
-                    )) : <Typography color="text.secondary">No payment data yet for the current filters.</Typography>}
-                  </Box>
+                  {analyticsLoading ? (
+                    <PanelListSkeleton rows={4} />
+                  ) : (
+                    <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                      {analyticsSummary.salesByPaymentMethod.length ? analyticsSummary.salesByPaymentMethod.map((entry) => (
+                        <Box key={entry.label} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <Typography variant="body2">{entry.label}</Typography>
+                          <Typography variant="body2" color="text.secondary">{currencyFormatter.format(entry.value)}</Typography>
+                        </Box>
+                      )) : <Typography color="text.secondary">No payment data yet for the current filters.</Typography>}
+                    </Box>
+                  )}
                 </Box>
                 <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
                   <Typography variant="subtitle1" fontWeight={600}>Sales by Sales Channel</Typography>
-                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
-                    {analyticsSummary.salesBySalesChannel.length ? analyticsSummary.salesBySalesChannel.map((entry) => (
-                      <Box key={entry.label} sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <Typography variant="body2">{entry.label}</Typography>
-                        <Typography variant="body2" color="text.secondary">{currencyFormatter.format(entry.value)}</Typography>
-                      </Box>
-                    )) : <Typography color="text.secondary">No sales channel data yet for the current filters.</Typography>}
-                  </Box>
+                  {analyticsLoading ? (
+                    <PanelListSkeleton rows={4} />
+                  ) : (
+                    <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                      {analyticsSummary.salesBySalesChannel.length ? analyticsSummary.salesBySalesChannel.map((entry) => (
+                        <Box key={entry.label} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <Typography variant="body2">{entry.label}</Typography>
+                          <Typography variant="body2" color="text.secondary">{currencyFormatter.format(entry.value)}</Typography>
+                        </Box>
+                      )) : <Typography color="text.secondary">No sales channel data yet for the current filters.</Typography>}
+                    </Box>
+                  )}
                 </Box>
               </Box>
             </Box>
@@ -405,49 +478,65 @@ export default function DashboardSummaryPage() {
               <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' } }}>
                 <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
                   <Typography variant="subtitle1" fontWeight={600}>Top Customers by Revenue</Typography>
-                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
-                    {analyticsSummary.topCustomersByRevenue.length ? analyticsSummary.topCustomersByRevenue.map((customer) => (
-                      <Box key={customer.name} sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <Typography variant="body2">{customer.name}</Typography>
-                        <Typography variant="body2" color="text.secondary">{currencyFormatter.format(customer.revenue)}</Typography>
-                      </Box>
-                    )) : <Typography color="text.secondary">No customer revenue data yet for the current filters.</Typography>}
-                  </Box>
+                  {analyticsLoading ? (
+                    <PanelListSkeleton rows={4} />
+                  ) : (
+                    <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                      {analyticsSummary.topCustomersByRevenue.length ? analyticsSummary.topCustomersByRevenue.map((customer) => (
+                        <Box key={customer.name} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <Typography variant="body2">{customer.name}</Typography>
+                          <Typography variant="body2" color="text.secondary">{currencyFormatter.format(customer.revenue)}</Typography>
+                        </Box>
+                      )) : <Typography color="text.secondary">No customer revenue data yet for the current filters.</Typography>}
+                    </Box>
+                  )}
                 </Box>
                 <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
                   <Typography variant="subtitle1" fontWeight={600}>Recent Customers</Typography>
-                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
-                    {analyticsSummary.recentCustomers.length ? analyticsSummary.recentCustomers.map((customer) => (
-                      <Box key={customer.id} sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <Typography variant="body2">{customer.name}</Typography>
-                        <Typography variant="body2" color="text.secondary">{customer.purchaseCount} orders</Typography>
-                      </Box>
-                    )) : <Typography color="text.secondary">No recent customers yet for the current filters.</Typography>}
-                  </Box>
+                  {analyticsLoading ? (
+                    <PanelListSkeleton rows={4} />
+                  ) : (
+                    <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                      {analyticsSummary.recentCustomers.length ? analyticsSummary.recentCustomers.map((customer) => (
+                        <Box key={customer.id} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <Typography variant="body2">{customer.name}</Typography>
+                          <Typography variant="body2" color="text.secondary">{customer.purchaseCount} orders</Typography>
+                        </Box>
+                      )) : <Typography color="text.secondary">No recent customers yet for the current filters.</Typography>}
+                    </Box>
+                  )}
                 </Box>
               </Box>
               <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' } }}>
                 <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
                   <Typography variant="subtitle1" fontWeight={600}>Customer Growth Trend</Typography>
-                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
-                    {analyticsSummary.customerGrowthTrend.length ? analyticsSummary.customerGrowthTrend.map((entry) => (
-                      <Box key={entry.month} sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <Typography variant="body2">{entry.month}</Typography>
-                        <Typography variant="body2" color="text.secondary">{entry.customers} customers</Typography>
-                      </Box>
-                    )) : <Typography color="text.secondary">No customer growth data yet for the current filters.</Typography>}
-                  </Box>
+                  {analyticsLoading ? (
+                    <PanelListSkeleton rows={4} />
+                  ) : (
+                    <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                      {analyticsSummary.customerGrowthTrend.length ? analyticsSummary.customerGrowthTrend.map((entry) => (
+                        <Box key={entry.month} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <Typography variant="body2">{entry.month}</Typography>
+                          <Typography variant="body2" color="text.secondary">{entry.customers} customers</Typography>
+                        </Box>
+                      )) : <Typography color="text.secondary">No customer growth data yet for the current filters.</Typography>}
+                    </Box>
+                  )}
                 </Box>
                 <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
                   <Typography variant="subtitle1" fontWeight={600}>Revenue Contribution</Typography>
-                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
-                    {analyticsSummary.customerRevenueContribution.length ? analyticsSummary.customerRevenueContribution.map((entry) => (
-                      <Box key={entry.name} sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <Typography variant="body2">{entry.name}</Typography>
-                        <Typography variant="body2" color="text.secondary">{entry.share.toFixed(1)}%</Typography>
-                      </Box>
-                    )) : <Typography color="text.secondary">No revenue contribution data yet for the current filters.</Typography>}
-                  </Box>
+                  {analyticsLoading ? (
+                    <PanelListSkeleton rows={4} />
+                  ) : (
+                    <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                      {analyticsSummary.customerRevenueContribution.length ? analyticsSummary.customerRevenueContribution.map((entry) => (
+                        <Box key={entry.name} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <Typography variant="body2">{entry.name}</Typography>
+                          <Typography variant="body2" color="text.secondary">{entry.share.toFixed(1)}%</Typography>
+                        </Box>
+                      )) : <Typography color="text.secondary">No revenue contribution data yet for the current filters.</Typography>}
+                    </Box>
+                  )}
                 </Box>
               </Box>
             </Box>
@@ -459,68 +548,88 @@ export default function DashboardSummaryPage() {
               <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' } }}>
                 <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
                   <Typography variant="subtitle1" fontWeight={600}>Inventory Distribution by Category</Typography>
-                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
-                    {analyticsSummary.inventoryDistributionByCategory.length ? analyticsSummary.inventoryDistributionByCategory.map((entry) => (
-                      <Box key={entry.name}>
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                          <Typography variant="body2">{entry.name}</Typography>
-                          <Typography variant="body2" color="text.secondary">{entry.value} units</Typography>
+                  {analyticsLoading ? (
+                    <PanelListSkeleton rows={4} />
+                  ) : (
+                    <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                      {analyticsSummary.inventoryDistributionByCategory.length ? analyticsSummary.inventoryDistributionByCategory.map((entry) => (
+                        <Box key={entry.name}>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                            <Typography variant="body2">{entry.name}</Typography>
+                            <Typography variant="body2" color="text.secondary">{entry.value} units</Typography>
+                          </Box>
+                          <Box sx={{ height: 8, borderRadius: 999, bgcolor: '#eef2ff', overflow: 'hidden' }}>
+                            <Box sx={{ height: '100%', width: `${Math.min(100, (entry.value / Math.max(...analyticsSummary.inventoryDistributionByCategory.map((item) => item.value), 1)) * 100)}%`, bgcolor: '#10b981', borderRadius: 999 }} />
+                          </Box>
                         </Box>
-                        <Box sx={{ height: 8, borderRadius: 999, bgcolor: '#eef2ff', overflow: 'hidden' }}>
-                          <Box sx={{ height: '100%', width: `${Math.min(100, (entry.value / Math.max(...analyticsSummary.inventoryDistributionByCategory.map((item) => item.value), 1)) * 100)}%`, bgcolor: '#10b981', borderRadius: 999 }} />
-                        </Box>
-                      </Box>
-                    )) : <Typography color="text.secondary">No inventory categories yet for the current filters.</Typography>}
-                  </Box>
+                      )) : <Typography color="text.secondary">No inventory categories yet for the current filters.</Typography>}
+                    </Box>
+                  )}
                 </Box>
                 <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
                   <Typography variant="subtitle1" fontWeight={600}>Stock Status Summary</Typography>
-                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between' }}><Typography variant="body2">In stock</Typography><Typography color="text.secondary">{analyticsSummary.stockStatusSummary.inStock}</Typography></Box>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between' }}><Typography variant="body2">Low stock</Typography><Typography color="text.secondary">{analyticsSummary.stockStatusSummary.lowStock}</Typography></Box>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between' }}><Typography variant="body2">Out of stock</Typography><Typography color="text.secondary">{analyticsSummary.stockStatusSummary.outOfStock}</Typography></Box>
-                  </Box>
+                  {analyticsLoading ? (
+                    <PanelListSkeleton rows={3} />
+                  ) : (
+                    <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between' }}><Typography variant="body2">In stock</Typography><Typography color="text.secondary">{analyticsSummary.stockStatusSummary.inStock}</Typography></Box>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between' }}><Typography variant="body2">Low stock</Typography><Typography color="text.secondary">{analyticsSummary.stockStatusSummary.lowStock}</Typography></Box>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between' }}><Typography variant="body2">Out of stock</Typography><Typography color="text.secondary">{analyticsSummary.stockStatusSummary.outOfStock}</Typography></Box>
+                    </Box>
+                  )}
                 </Box>
               </Box>
               <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' } }}>
                 <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
                   <Typography variant="subtitle1" fontWeight={600}>Top Low Stock Products</Typography>
-                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
-                    {analyticsSummary.topLowStockProducts.length ? analyticsSummary.topLowStockProducts.map((product) => (
-                      <Box key={`${product.name}-${product.sku}`} sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <Typography variant="body2">{product.name}</Typography>
-                        <Typography variant="body2" color="text.secondary">{product.stock} left</Typography>
-                      </Box>
-                    )) : <Typography color="text.secondary">No low stock products for the current filters.</Typography>}
-                  </Box>
+                  {analyticsLoading ? (
+                    <PanelListSkeleton rows={4} />
+                  ) : (
+                    <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                      {analyticsSummary.topLowStockProducts.length ? analyticsSummary.topLowStockProducts.map((product) => (
+                        <Box key={`${product.name}-${product.sku}`} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <Typography variant="body2">{product.name}</Typography>
+                          <Typography variant="body2" color="text.secondary">{product.stock} left</Typography>
+                        </Box>
+                      )) : <Typography color="text.secondary">No low stock products for the current filters.</Typography>}
+                    </Box>
+                  )}
                 </Box>
                 <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
                   <Typography variant="subtitle1" fontWeight={600}>Out of Stock Products</Typography>
-                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
-                    {analyticsSummary.outOfStockProductDetails.length ? analyticsSummary.outOfStockProductDetails.map((product) => (
-                      <Box key={`${product.name}-${product.sku}`} sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <Typography variant="body2">{product.name}</Typography>
-                        <Typography variant="body2" color="text.secondary">{product.sku}</Typography>
-                      </Box>
-                    )) : <Typography color="text.secondary">No out of stock products for the current filters.</Typography>}
-                  </Box>
+                  {analyticsLoading ? (
+                    <PanelListSkeleton rows={4} />
+                  ) : (
+                    <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                      {analyticsSummary.outOfStockProductDetails.length ? analyticsSummary.outOfStockProductDetails.map((product) => (
+                        <Box key={`${product.name}-${product.sku}`} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <Typography variant="body2">{product.name}</Typography>
+                          <Typography variant="body2" color="text.secondary">{product.sku}</Typography>
+                        </Box>
+                      )) : <Typography color="text.secondary">No out of stock products for the current filters.</Typography>}
+                    </Box>
+                  )}
                 </Box>
               </Box>
               <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 2 }}>
                 <Typography variant="subtitle1" fontWeight={600}>Inventory Value by Category</Typography>
-                <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
-                  {analyticsSummary.inventoryValueByCategory.length ? analyticsSummary.inventoryValueByCategory.map((entry) => (
-                    <Box key={entry.name}>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                        <Typography variant="body2">{entry.name}</Typography>
-                        <Typography variant="body2" color="text.secondary">{currencyFormatter.format(entry.value)}</Typography>
+                {analyticsLoading ? (
+                  <PanelListSkeleton rows={4} />
+                ) : (
+                  <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
+                    {analyticsSummary.inventoryValueByCategory.length ? analyticsSummary.inventoryValueByCategory.map((entry) => (
+                      <Box key={entry.name}>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                          <Typography variant="body2">{entry.name}</Typography>
+                          <Typography variant="body2" color="text.secondary">{currencyFormatter.format(entry.value)}</Typography>
+                        </Box>
+                        <Box sx={{ height: 8, borderRadius: 999, bgcolor: '#eef2ff', overflow: 'hidden' }}>
+                          <Box sx={{ height: '100%', width: `${Math.min(100, (entry.value / Math.max(...analyticsSummary.inventoryValueByCategory.map((item) => item.value), 1)) * 100)}%`, bgcolor: '#f59e0b', borderRadius: 999 }} />
+                        </Box>
                       </Box>
-                      <Box sx={{ height: 8, borderRadius: 999, bgcolor: '#eef2ff', overflow: 'hidden' }}>
-                        <Box sx={{ height: '100%', width: `${Math.min(100, (entry.value / Math.max(...analyticsSummary.inventoryValueByCategory.map((item) => item.value), 1)) * 100)}%`, bgcolor: '#f59e0b', borderRadius: 999 }} />
-                      </Box>
-                    </Box>
-                  )) : <Typography color="text.secondary">No inventory values yet for the current filters.</Typography>}
-                </Box>
+                    )) : <Typography color="text.secondary">No inventory values yet for the current filters.</Typography>}
+                  </Box>
+                )}
               </Box>
             </Box>
           </Card>
@@ -528,7 +637,9 @@ export default function DashboardSummaryPage() {
       ) : null}
       <Card className="dashboard-content__table-card">
         <Typography className="dashboard-content__title dashboard-content__title--dark">Notifications</Typography>
-        {notifications.length ? (
+        {notificationsLoading ? (
+          <PanelListSkeleton rows={3} />
+        ) : notifications.length ? (
           <Box sx={{ display: 'grid', gap: 1.5 }}>
             {notifications.map((notification) => (
               <Card key={notification.id} variant="outlined" className="dashboard-summary-card">

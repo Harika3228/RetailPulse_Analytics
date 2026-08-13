@@ -1,4 +1,26 @@
-export const sidebarItems = ['Dashboard', 'Inventory', 'Categories', 'Products', 'Customers', 'Sales', 'Forecasting', 'Reports', 'Notifications', 'Audit Logs', 'Settings'];
+import {
+  formatApiDetail,
+  getDateRangeError,
+  getErrorMessage,
+  getErrorStatus,
+  HttpError,
+  isAuthError,
+  isDateRangeInvalid,
+  isNotFoundError,
+} from '../../lib/errors.js';
+
+export {
+  formatApiDetail,
+  getDateRangeError,
+  getErrorMessage,
+  getErrorStatus,
+  HttpError,
+  isAuthError,
+  isDateRangeInvalid,
+  isNotFoundError,
+};
+
+export const sidebarItems = ['Dashboard', 'Inventory', 'Categories', 'Products', 'Customers', 'Sales', 'Sales Analytics', 'Forecasting', 'Reports', 'Notifications', 'Audit Logs', 'Settings'];
 export const adminOnlyItems = new Set(['Categories', 'Products', 'Customers', 'Audit Logs']);
 
 export const sidebarRouteMap = {
@@ -8,6 +30,7 @@ export const sidebarRouteMap = {
   Products: '/products',
   Customers: '/customers',
   Sales: '/sales',
+  'Sales Analytics': '/analytics/sales',
   Forecasting: '/forecasting',
   Reports: '/dashboard',
   Notifications: '/notifications',
@@ -24,15 +47,6 @@ function getApiBases() {
 
 export function getApiBase() {
   return getApiBases()[0];
-}
-
-export class HttpError extends Error {
-  status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
 }
 
 export function normalizeRole(role?: string) {
@@ -57,11 +71,7 @@ export async function apiRequest(path: string, token: string, init: RequestInit 
         try {
           const payload = await response.json();
           if (payload?.detail) {
-            if (Array.isArray(payload.detail)) {
-              message = payload.detail.map((err) => err.msg).join('; ');
-            } else {
-              message = String(payload.detail);
-            }
+            message = formatApiDetail(payload.detail);
           }
         } catch {
           // Ignore malformed error payloads.
@@ -81,7 +91,7 @@ export async function apiRequest(path: string, token: string, init: RequestInit 
   if (lastError instanceof Error) {
     throw lastError;
   }
-  throw new Error('API is unreachable. Ensure backend is running.');
+  throw new Error('API is unreachable. Ensure the backend server is running.');
 }
 
 export function formatCurrency(value: number | string | null | undefined) {

@@ -9,6 +9,8 @@ from backend.controllers.dashboard_controller import (
     dashboard_inventory_summary,
     dashboard_product_summary,
     dashboard_sales_summary,
+    dashboard_top_customers,
+    dashboard_top_products,
     get_notifications,
     list_audit_logs,
     list_company_users,
@@ -22,6 +24,8 @@ from backend.schemas import (
     NotificationResponse,
     ProductSummaryResponse,
     SalesDashboardSummaryResponse,
+    TopCustomerResponse,
+    TopProductResponse,
 )
 
 router = APIRouter(tags=["dashboard"])
@@ -58,6 +62,7 @@ def dashboard_analytics_summary_route(
     brand: str | None = None,
     salesChannel: str | None = None,
     paymentMethod: str | None = None,
+    customer: str | None = None,
 ):
     return dashboard_analytics_summary(
         db,
@@ -69,6 +74,59 @@ def dashboard_analytics_summary_route(
         brand=brand,
         salesChannel=salesChannel,
         paymentMethod=paymentMethod,
+        customer=customer,
+    )
+
+
+@router.get("/dashboard/analytics/top-products", response_model=list[TopProductResponse])
+def dashboard_top_products_route(
+    db: DbDependency,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    dateFrom: str | None = None,
+    dateTo: str | None = None,
+    product: str | None = None,
+    category: str | None = None,
+    brand: str | None = None,
+    salesChannel: str | None = None,
+    paymentMethod: str | None = None,
+    customer: str | None = None,
+    limit: int | None = 50,
+):
+    return dashboard_top_products(
+        db,
+        authorization,
+        dateFrom=dateFrom,
+        dateTo=dateTo,
+        product=product,
+        category=category,
+        brand=brand,
+        salesChannel=salesChannel,
+        paymentMethod=paymentMethod,
+        customer=customer,
+        limit=limit,
+    )
+
+
+@router.get("/dashboard/analytics/top-customers", response_model=list[TopCustomerResponse])
+def dashboard_top_customers_route(
+    db: DbDependency,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    dateFrom: str | None = None,
+    dateTo: str | None = None,
+    salesChannel: str | None = None,
+    paymentMethod: str | None = None,
+    customer: str | None = None,
+    limit: int | None = 20,
+):
+    return dashboard_top_customers(
+        db,
+        authorization,
+        dateFrom=dateFrom,
+        dateTo=dateTo,
+        salesChannel=salesChannel,
+        paymentMethod=paymentMethod,
+        customer=customer,
+        limit=limit,
     )
 
 
@@ -84,6 +142,7 @@ def dashboard_export_route(
     brand: str | None = None,
     salesChannel: str | None = None,
     paymentMethod: str | None = None,
+    customer: str | None = None,
 ):
     return dashboard_export(
         db,
@@ -96,6 +155,7 @@ def dashboard_export_route(
         brand=brand,
         salesChannel=salesChannel,
         paymentMethod=paymentMethod,
+        customer=customer,
     )
 
 

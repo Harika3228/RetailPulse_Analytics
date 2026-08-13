@@ -56,11 +56,13 @@ def list_sales_transactions_route(
     salesChannel: str | None = None,
     paymentMethod: str | None = None,
     paymentStatus: str | None = None,
+    product: str | None = None,
+    customer: str | None = None,
     sortBy: str | None = None,
     sortOrder: str | None = None,
     authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    return list_sales_transactions(db, q, dateFrom, dateTo, categoryId, salesChannel, paymentMethod, paymentStatus, sortBy, sortOrder, authorization)
+    return list_sales_transactions(db, q, dateFrom, dateTo, categoryId, salesChannel, paymentMethod, paymentStatus, product, customer, sortBy, sortOrder, authorization)
 
 
 @router.get("/sales/{transaction_id}", response_model=SalesTransactionResponse)

@@ -9,6 +9,13 @@
   min-height: 100vh;
   background: radial-gradient(circle at top right, #dbeafe 0%, var(--dashboard-bg) 45%, #f8fafc 100%);
   padding: 28px 14px;
+  overflow-x: hidden;
+}
+
+@media (max-width: 640px) {
+  .dashboard-page {
+    padding: 18px 10px;
+  }
 }
 
 .dashboard-page__layout {
@@ -155,6 +162,7 @@
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 12px !important;
   padding: 12px;
+  min-width: 0;
 }
 
 .dashboard-summary-card__label {
@@ -165,8 +173,28 @@
 
 .dashboard-summary-card__value {
   color: #fff;
-  font-size: 32px;
+  font-size: 30px;
   font-weight: 900;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1200px) {
+  .dashboard-summary-card__value {
+    font-size: 27px;
+  }
+}
+
+@media (max-width: 760px) {
+  .dashboard-summary-card__value {
+    font-size: 25px;
+  }
+}
+
+@media (max-width: 480px) {
+  .dashboard-summary-card__value {
+    font-size: 23px;
+  }
 }
 
 .dashboard-content__search-bar {
@@ -179,19 +207,20 @@
 
 .dashboard-content__search-bar--filters {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
 }
 
 .dashboard-content__search-input {
-  min-width: 220px;
+  min-width: min(100%, 220px);
 }
 
 .dashboard-content__filter-select {
-  min-width: 180px;
+  min-width: min(100%, 180px);
 }
 
 .dashboard-table {
   width: 100%;
+  max-width: 100%;
   overflow-x: auto;
 }
 
@@ -216,4 +245,26 @@
   color: #fff !important;
   font-weight: 700;
   text-transform: none;
+}
+
+@media (max-width: 640px) {
+  .dashboard-sidebar {
+    padding: 14px;
+  }
+
+  .dashboard-content__header-card {
+    padding: 16px;
+  }
+
+  .dashboard-content__table-card {
+    padding: 14px;
+  }
+
+  .dashboard-content__title {
+    font-size: 20px;
+  }
+}
+
+.MuiTablePagination-toolbar {
+  flex-wrap: wrap;
 }

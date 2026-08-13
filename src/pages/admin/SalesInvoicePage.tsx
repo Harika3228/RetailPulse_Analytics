@@ -1,10 +1,12 @@
-import { Alert, Box, Button, Card, CardContent, Divider, Skeleton, Stack, Typography } from '@mui/material';
-import { useCallback, useEffect, useState } from 'react';
+import { Box, Button, Card, CardContent, Divider, Skeleton, Stack, Typography } from '@mui/material';
+import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext.tsx';
 import AdminLayout from './AdminLayout.tsx';
-import { apiRequest, formatCurrency } from './adminShared.js';
+import ErrorBanner from '../../components/admin/ErrorBanner.tsx';
+import { formatCurrency, getErrorMessage } from './adminShared.js';
 import { formatSaleDatetime, saleNumberOfItems } from './salesShared.js';
+import { queryKeys, useApiQuery } from '../../lib/queryHooks';
 
 function pdfEscape(value) {
   const replacements = {
@@ -206,27 +208,21 @@ export default function SalesInvoicePage() {
   const navigate = useNavigate();
   const { token } = useAuth();
   const [errorMessage, setErrorMessage] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [transaction, setTransaction] = useState(null);
 
-  const loadTransaction = useCallback(async () => {
-    if (!token || !transactionId) {
-      return;
-    }
-    setLoading(true);
-    try {
-      const payload = await apiRequest(`/sales/${transactionId}`, token);
-      setTransaction(payload);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to load invoice');
-    } finally {
-      setLoading(false);
-    }
-  }, [token, transactionId]);
+  const transactionQuery = useApiQuery<Record<string, any> | null>(
+    queryKeys.sales.detail(transactionId ?? ''),
+    `/sales/${transactionId}`,
+    token,
+    { enabled: Boolean(token && transactionId) },
+  );
+  const transaction = transactionQuery.data;
+  const loading = transactionQuery.isLoading;
 
   useEffect(() => {
-    loadTransaction();
-  }, [loadTransaction]);
+    if (transactionQuery.error) {
+      setErrorMessage(getErrorMessage(transactionQuery.error, 'Failed to load invoice'));
+    }
+  }, [transactionQuery.error]);
 
   const handlePrint = () => {
     window.print();
@@ -248,9 +244,7 @@ export default function SalesInvoicePage() {
 
   return (
     <AdminLayout>
-      {errorMessage ? (
-        <Alert severity="error" onClose={() => setErrorMessage('')}>{errorMessage}</Alert>
-      ) : null}
+      <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage('')} />
       <Card className="dashboard-content__table-card">
         <CardContent>
           {loading ? (
@@ -283,7 +277,7 @@ export default function SalesInvoicePage() {
                 <Typography className="dashboard-content__title dashboard-content__title--dark">Invoice</Typography>
                 <Typography variant="body2" color="text.secondary">{transaction?.invoiceNumber ?? '-'}</Typography>
               </Box>
-              <Stack direction="row" spacing={1}>
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                 <Button variant="outlined" onClick={() => navigate(`/sales/${transactionId}`)}>Back</Button>
                 <Button variant="outlined" onClick={handlePrint}>Print</Button>
                 <Button variant="contained" className="primary-button" onClick={handleExportPdf}>Export PDF</Button>

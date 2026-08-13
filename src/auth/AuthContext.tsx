@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { formatApiDetail, HttpError } from '../lib/errors.js';
 
 type AuthUser = {
   id?: number;
@@ -50,24 +51,27 @@ async function apiRequest(path: string, options: ApiOptions = {}) {
         try {
           const payload = await response.json();
           if (payload?.detail) {
-            detail = payload.detail;
+            detail = formatApiDetail(payload.detail);
           }
         } catch {
           // ignore malformed error payload
         }
-        throw new Error(detail);
+        throw new HttpError(response.status, detail);
       }
 
       return await response.json();
     } catch (error) {
       lastError = error;
+      if (error instanceof HttpError && error.status < 500) {
+        throw error;
+      }
     }
   }
 
   if (lastError instanceof Error) {
     throw lastError;
   }
-  throw new Error('Unable to reach backend API');
+  throw new Error('Unable to reach the backend API. Please check that the server is running.');
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {

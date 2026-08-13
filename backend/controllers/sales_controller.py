@@ -122,6 +122,8 @@ def list_sales_transactions(
     salesChannel: str | None = None,
     paymentMethod: str | None = None,
     paymentStatus: str | None = None,
+    product: str | None = None,
+    customer: str | None = None,
     sortBy: str | None = None,
     sortOrder: str | None = None,
     authorization: str | None = None,
@@ -183,6 +185,16 @@ def list_sales_transactions(
         query = query.filter(SalesTransaction.paymentMethod.ilike(paymentMethod))
     if paymentStatus:
         query = query.filter(SalesTransaction.paymentStatus.ilike(paymentStatus))
+    if customer:
+        query = query.filter(SalesTransaction.customerName.ilike(f"%{customer}%"))
+    if product:
+        product_wildcard = f"%{product}%"
+        matching_transaction_ids = (
+            db.query(SalesTransactionLine.transactionId)
+            .filter(SalesTransactionLine.productNameSnapshot.ilike(product_wildcard))
+            .distinct()
+        )
+        query = query.filter(SalesTransaction.id.in_(matching_transaction_ids))
 
     normalized_sort = (sortBy or "date").strip().lower()
     normalized_order = (sortOrder or "desc").strip().lower()

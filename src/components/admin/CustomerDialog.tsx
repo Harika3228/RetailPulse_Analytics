@@ -16,8 +16,8 @@ import {
 const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 const phoneRegex = /^[\d\s\-.()+\]]{10,}$/;
 
-function validate(form) {
-  const errors = {};
+function validate(form: Record<string, string>) {
+  const errors: Record<string, string> = {};
   if (!form.firstName.trim()) {errors.firstName = 'First Name is required.';}
   if (!form.lastName.trim()) {errors.lastName = 'Last Name is required.';}
   if (!form.email.trim()) {

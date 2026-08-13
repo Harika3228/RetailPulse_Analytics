@@ -1,9 +1,9 @@
 import {
-  Alert,
   Box,
   Button,
   Card,
   MenuItem,
+  Skeleton,
   Stack,
   Switch,
   Table,
@@ -11,15 +11,19 @@ import {
   TableCell,
   TableContainer,
   TableHead,
+  TablePagination,
   TableRow,
   TextField,
   Typography,
 } from '@mui/material';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext.tsx';
 import AdminLayout from './AdminLayout.tsx';
-import { apiRequest, formatCurrency } from './adminShared.js';
+import ErrorBanner from '../../components/admin/ErrorBanner.tsx';
+import { apiRequest, formatCurrency, getErrorMessage } from './adminShared.js';
+import { queryKeys, useApiQuery, useDebouncedValue, useTablePagination } from '../../lib/queryHooks';
 import ProductDialog from '../../components/admin/ProductDialog.tsx';
 import ConfirmDeleteDialog from '../../components/admin/ConfirmDeleteDialog.tsx';
 
@@ -39,16 +43,18 @@ const defaultProductForm = {
 export default function ProductsPage() {
   const { token } = useAuth();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const [errorMessage, setErrorMessage] = useState('');
-  const [categories, setCategories] = useState<Array<{ id: number; name: string }>>([]);
-  const [products, setProducts] = useState<Array<Record<string, any>>>([]);
 
   const [productQuery, setProductQuery] = useState('');
   const [productCategoryFilter, setProductCategoryFilter] = useState('all');
   const [productBrandFilter, setProductBrandFilter] = useState('all');
   const [productStatusFilter, setProductStatusFilter] = useState('active');
   const [productSort, setProductSort] = useState('name_asc');
+
+  const debouncedProductQuery = useDebouncedValue(productQuery);
+  const { page, setPage, rowsPerPage, setRowsPerPage } = useTablePagination(10);
 
   const [productDialogOpen, setProductDialogOpen] = useState(false);
   const [productDeleteDialogOpen, setProductDeleteDialogOpen] = useState(false);
@@ -57,44 +63,13 @@ export default function ProductsPage() {
   const [editingProductId, setEditingProductId] = useState<number | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Record<string, any> | null>(null);
 
-  const categoryById = useMemo(() => {
-    const map = new Map<number, string>();
-    categories.forEach((category) => {
-      map.set(category.id, category.name);
-    });
-    return map;
-  }, [categories]);
+  const categoriesQuery = useApiQuery<Array<{ id: number; name: string }>>(queryKeys.categories.list(''), '/categories', token);
+  const categories = categoriesQuery.data ?? [];
 
-  const brandOptions = useMemo(() => {
-    const brands = new Set<string>();
-    products.forEach((product) => {
-      if (product.brand?.trim()) {
-        brands.add(product.brand.trim());
-      }
-    });
-    return Array.from(brands).sort((a, b) => a.localeCompare(b));
-  }, [products]);
-
-  const loadCategoryOptions = useCallback(async () => {
-    if (!token) {
-      return;
-    }
-    try {
-      const payload = await apiRequest('/categories', token);
-      setCategories(payload);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to load categories');
-    }
-  }, [token]);
-
-  const loadProducts = useCallback(async () => {
-    if (!token) {
-      return;
-    }
-
+  const productParams = useMemo(() => {
     const params = new URLSearchParams();
-    if (productQuery.trim()) {
-      params.set('q', productQuery.trim());
+    if (debouncedProductQuery.trim()) {
+      params.set('q', debouncedProductQuery.trim());
     }
     if (productCategoryFilter !== 'all') {
       params.set('categoryId', productCategoryFilter);
@@ -119,19 +94,45 @@ export default function ProductsPage() {
       params.set('sortBy', 'recently_added');
       params.set('sortOrder', 'desc');
     }
+    return params.toString();
+  }, [debouncedProductQuery, productCategoryFilter, productBrandFilter, productStatusFilter, productSort]);
 
-    try {
-      const payload = await apiRequest(`/products?${params.toString()}`, token);
-      setProducts(payload);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to load products');
-    }
-  }, [token, productQuery, productCategoryFilter, productBrandFilter, productStatusFilter, productSort]);
+  const productsQuery = useApiQuery<Array<Record<string, any>>>(queryKeys.products.list(productParams), `/products?${productParams}`, token);
+  const products = productsQuery.data ?? [];
 
   useEffect(() => {
-    loadCategoryOptions();
-    loadProducts();
-  }, [loadCategoryOptions, loadProducts]);
+    setPage(0);
+  }, [productParams, setPage]);
+
+  useEffect(() => {
+    if (productsQuery.error || categoriesQuery.error) {
+      setErrorMessage(getErrorMessage(productsQuery.error ?? categoriesQuery.error, 'Failed to load products'));
+    }
+  }, [productsQuery.error, categoriesQuery.error]);
+
+  const invalidateProducts = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.products.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.categories.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.inventory.all });
+  }, [queryClient]);
+
+  const categoryById = useMemo(() => {
+    const map = new Map<number, string>();
+    categories.forEach((category) => {
+      map.set(category.id, category.name);
+    });
+    return map;
+  }, [categories]);
+
+  const brandOptions = useMemo(() => {
+    const brands = new Set<string>();
+    products.forEach((product) => {
+      if (product.brand?.trim()) {
+        brands.add(product.brand.trim());
+      }
+    });
+    return Array.from(brands).sort((a, b) => a.localeCompare(b));
+  }, [products]);
 
   const openAddProduct = () => {
     setProductForm(defaultProductForm);
@@ -227,9 +228,9 @@ export default function ProductsPage() {
       }
 
       setProductDialogOpen(false);
-      await loadProducts();
+      invalidateProducts();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to save product';
+      const message = getErrorMessage(error, 'Unable to save product');
       if (message.toLowerCase().includes('sku already exists')) {
         setProductFormError('SKU already exists.');
       } else {
@@ -251,11 +252,11 @@ export default function ProductsPage() {
       await apiRequest(`/products/${selectedProduct.id}`, token, { method: 'DELETE' });
       setProductDeleteDialogOpen(false);
       setSelectedProduct(null);
-      await loadProducts();
+      invalidateProducts();
     } catch (error) {
       setProductDeleteDialogOpen(false);
       setSelectedProduct(null);
-      setErrorMessage(error instanceof Error ? error.message : 'Unable to delete product');
+      setErrorMessage(getErrorMessage(error, 'Unable to delete product'));
     }
   };
 
@@ -268,15 +269,19 @@ export default function ProductsPage() {
         method: 'PATCH',
         body: JSON.stringify({ status: checked ? 'active' : 'inactive' }),
       });
-      await loadProducts();
+      invalidateProducts();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Unable to update status');
+      setErrorMessage(getErrorMessage(error, 'Unable to update status'));
     }
   };
 
+  const pagedProducts = useMemo(() => {
+    return products.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
+  }, [products, page, rowsPerPage]);
+
   return (
     <AdminLayout>
-      {errorMessage ? <Alert severity="error">{errorMessage}</Alert> : null}
+      <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage('')} />
       <Card className="dashboard-content__table-card">
         <Box className="dashboard-content__header">
           <Typography className="dashboard-content__title dashboard-content__title--dark">Products</Typography>
@@ -345,7 +350,7 @@ export default function ProductsPage() {
             <MenuItem value="price_high_low">Sort By: Price High to Low</MenuItem>
             <MenuItem value="recent">Sort By: Recently Added</MenuItem>
           </TextField>
-          <Button variant="outlined" onClick={loadProducts}>
+          <Button variant="outlined" onClick={() => { void productsQuery.refetch(); }}>
             Apply
           </Button>
         </Box>
@@ -365,48 +370,80 @@ export default function ProductsPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {products.map((product) => (
-                <TableRow key={product.id}>
-                  <TableCell>{product.name}</TableCell>
-                  <TableCell>{product.sku}</TableCell>
-                  <TableCell>{categoryById.get(product.categoryId) ?? '-'}</TableCell>
-                  <TableCell>{product.brand}</TableCell>
-                  <TableCell>{formatCurrency(product.unitPrice)}</TableCell>
-                  <TableCell>{product.stockQuantity}</TableCell>
-                  <TableCell>
-                    <Stack direction="row" alignItems="center" spacing={1}>
-                      <Typography>
-                        {product.status === 'active'
-                          ? 'Active'
-                          : product.status === 'out_of_stock'
-                            ? 'Out of Stock'
-                            : 'Inactive'}
-                      </Typography>
-                      <Switch
-                        checked={product.status === 'active'}
-                        disabled={product.status === 'out_of_stock'}
-                        onChange={(event) => toggleProductStatus(product, event.target.checked)}
-                      />
-                    </Stack>
-                  </TableCell>
-                  <TableCell>
-                    <Stack direction="row" spacing={1}>
-                      <Button size="small" onClick={() => navigate(`/products/${product.id}`)}>
-                        View
-                      </Button>
-                      <Button size="small" onClick={() => openEditProduct(product)}>
-                        Edit
-                      </Button>
-                      <Button size="small" color="error" onClick={() => confirmDeleteProduct(product)}>
-                        Delete
-                      </Button>
-                    </Stack>
+              {productsQuery.isLoading ? (
+                Array.from({ length: 5 }).map((_, index) => (
+                  <TableRow key={`skeleton-${index}`}>
+                    {Array.from({ length: 8 }).map((__, colIndex) => (
+                      <TableCell key={`skeleton-${index}-${colIndex}`}>
+                        <Skeleton variant="text" />
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : pagedProducts.length ? (
+                pagedProducts.map((product) => (
+                  <TableRow key={product.id}>
+                    <TableCell>{product.name}</TableCell>
+                    <TableCell>{product.sku}</TableCell>
+                    <TableCell>{categoryById.get(product.categoryId) ?? '-'}</TableCell>
+                    <TableCell>{product.brand}</TableCell>
+                    <TableCell>{formatCurrency(product.unitPrice)}</TableCell>
+                    <TableCell>{product.stockQuantity}</TableCell>
+                    <TableCell>
+                      <Stack direction="row" alignItems="center" spacing={1}>
+                        <Typography>
+                          {product.status === 'active'
+                            ? 'Active'
+                            : product.status === 'out_of_stock'
+                              ? 'Out of Stock'
+                              : 'Inactive'}
+                        </Typography>
+                        <Switch
+                          checked={product.status === 'active'}
+                          disabled={product.status === 'out_of_stock'}
+                          onChange={(event) => toggleProductStatus(product, event.target.checked)}
+                        />
+                      </Stack>
+                    </TableCell>
+                    <TableCell>
+                      <Stack direction="row" spacing={1}>
+                        <Button size="small" onClick={() => navigate(`/products/${product.id}`)}>
+                          View
+                        </Button>
+                        <Button size="small" onClick={() => openEditProduct(product)}>
+                          Edit
+                        </Button>
+                        <Button size="small" color="error" onClick={() => confirmDeleteProduct(product)}>
+                          Delete
+                        </Button>
+                      </Stack>
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={8} sx={{ textAlign: 'center', py: 4 }}>
+                    No products found. Adjust your search or create a new product.
                   </TableCell>
                 </TableRow>
-              ))}
+              )}
             </TableBody>
           </Table>
         </TableContainer>
+        {products.length > 0 ? (
+          <TablePagination
+            component="div"
+            count={products.length}
+            page={page}
+            rowsPerPage={rowsPerPage}
+            rowsPerPageOptions={[10, 25, 50, 100]}
+            onPageChange={(_event, nextPage) => setPage(nextPage)}
+            onRowsPerPageChange={(event) => {
+              setRowsPerPage(parseInt(event.target.value, 10));
+              setPage(0);
+            }}
+          />
+        ) : null}
         <Typography className="dashboard-footnote">
           Inactive products are blocked from Sales/Billing/New Orders/Purchase screens, but remain visible in reports and historical sales.
         </Typography>

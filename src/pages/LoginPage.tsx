@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.tsx';
+import { getErrorMessage } from '../lib/errors.js';
 import { useState } from 'react';
 import '../styles/login.css';
 
@@ -31,7 +32,7 @@ export default function LoginPage() {
       await login(data.email, data.password);
       navigate('/dashboard');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to sign in';
+      const message = getErrorMessage(error, 'Unable to sign in');
       setSubmitError(message);
     }
   };

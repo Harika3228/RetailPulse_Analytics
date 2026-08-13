@@ -5,6 +5,7 @@ import LoginPage from './pages/LoginPage.tsx';
 import RegisterPage from './pages/RegisterPage.tsx';
 import DashboardSummaryPage from './pages/admin/DashboardSummaryPage.tsx';
 import SalesDashboardPage from './pages/admin/SalesDashboardPage.tsx';
+import SalesAnalyticsPage from './pages/admin/SalesAnalyticsPage.tsx';
 import SalesPage from './pages/admin/SalesPage.tsx';
 import SalesDetailsPage from './pages/admin/SalesDetailsPage.tsx';
 import SalesInvoicePage from './pages/admin/SalesInvoicePage.tsx';
@@ -18,6 +19,7 @@ import InventoryPage from './pages/admin/InventoryPage.tsx';
 import AuditLogsPage from './pages/admin/AuditLogsPage.tsx';
 import ForecastingPage from './pages/admin/ForecastingPage.tsx';
 import { AuthProvider, useAuth } from './auth/AuthContext.tsx';
+import ErrorBoundary from './components/admin/ErrorBoundary.tsx';
 
 const theme = createTheme({
   palette: {
@@ -80,6 +82,14 @@ function AppRoutes() {
         element={
           <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
             <SalesDashboardPage />
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/analytics/sales"
+        element={
+          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+            <SalesAnalyticsPage />
           </RoleProtectedRoute>
         }
       />
@@ -191,9 +201,11 @@ export default function App() {
   return (
     <ThemeProvider theme={appTheme}>
       <CssBaseline />
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
+      <ErrorBoundary>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </ErrorBoundary>
     </ThemeProvider>
   );
 }

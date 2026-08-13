@@ -107,16 +107,22 @@ class AnalyticsDashboardResponse(BaseModel):
     totalOrders: int
     totalProductsSold: int
     averageOrderValue: float
+    totalDiscount: float
+    totalTax: float
     totalInventoryValue: float
     lowStockProducts: int
     outOfStockProducts: int
     totalCategories: int
     revenueTrend: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     salesTrend: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    orderTrend: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     topSellingProducts: list[dict[str, Any]] = Field(default_factory=list)
     topPerformingCategories: list[dict[str, Any]] = Field(default_factory=list)
     salesByPaymentMethod: list[dict[str, Any]] = Field(default_factory=list)
     salesBySalesChannel: list[dict[str, Any]] = Field(default_factory=list)
+    salesByPaymentStatus: list[dict[str, Any]] = Field(default_factory=list)
+    ordersBySalesChannel: list[dict[str, Any]] = Field(default_factory=list)
+    ordersByPaymentMethod: list[dict[str, Any]] = Field(default_factory=list)
     inventoryDistributionByCategory: list[dict[str, Any]] = Field(default_factory=list)
     stockStatusSummary: dict[str, int] = Field(default_factory=dict)
     topLowStockProducts: list[dict[str, Any]] = Field(default_factory=list)
@@ -137,6 +143,41 @@ class AuditLogResponse(BaseModel):
     action: str
     performedBy: str
     time: str
+
+
+class TopProductResponse(BaseModel):
+    name: str
+    sku: str = ""
+    quantity: int
+    revenue: float
+
+
+class TopCustomerResponse(BaseModel):
+    name: str
+    orders: int
+    totalSpend: float
+    averageOrderValue: float
+
+
+class SalesAnalyticsSummaryResponse(BaseModel):
+    totalRevenue: float
+    totalOrders: int
+    totalProductsSold: int
+    averageOrderValue: float
+    totalDiscount: float
+    totalTax: float
+
+
+class SalesAnalyticsTrendResponse(BaseModel):
+    revenueTrend: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    salesTrend: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    orderTrend: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+
+
+class SalesAnalyticsPaymentMethodResponse(BaseModel):
+    paymentMethods: list[dict[str, Any]] = Field(default_factory=list)
+    totalRevenue: float
+    totalOrders: int
 
 
 class NotificationResponse(BaseModel):

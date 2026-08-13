@@ -1,9 +1,11 @@
-import { Alert, Box, Button, Card, Skeleton, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from '@mui/material';
+import { Box, Button, Card, Skeleton, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext.tsx';
 import AdminLayout from './AdminLayout.tsx';
-import { apiRequest, formatCurrency, formatDate } from './adminShared';
+import ErrorBanner from '../../components/admin/ErrorBanner.tsx';
+import { formatCurrency, formatDate, getErrorMessage } from './adminShared';
+import { queryKeys, useApiQuery } from '../../lib/queryHooks';
 import CustomerSegmentBadge from '../../components/admin/CustomerSegmentBadge.tsx';
 
 export default function CustomerDetailsPage() {
@@ -11,23 +13,21 @@ export default function CustomerDetailsPage() {
   const navigate = useNavigate();
   const { customerId } = useParams();
   const [errorMessage, setErrorMessage] = useState('');
-  const [customer, setCustomer] = useState(null);
-  const [loading, setLoading] = useState(true);
+
+  const customerQuery = useApiQuery<Record<string, any> | null>(
+    queryKeys.customers.detail(customerId ?? ''),
+    `/customers/${customerId}`,
+    token,
+    { enabled: Boolean(token && customerId) },
+  );
+  const customer = customerQuery.data;
+  const loading = customerQuery.isLoading;
 
   useEffect(() => {
-    if (!token || !customerId) {return;}
-    (async () => {
-      setLoading(true);
-      try {
-        const payload = await apiRequest(`/customers/${customerId}`, token);
-        setCustomer(payload);
-      } catch (error) {
-        setErrorMessage(error instanceof Error ? error.message : 'Unable to load customer details');
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [token, customerId]);
+    if (customerQuery.error) {
+      setErrorMessage(getErrorMessage(customerQuery.error, 'Unable to load customer details'));
+    }
+  }, [customerQuery.error]);
 
   const recentOrders = useMemo(() => {
     if (!customer?.recentOrders) {return [];}
@@ -36,7 +36,7 @@ export default function CustomerDetailsPage() {
 
   return (
     <AdminLayout>
-      {errorMessage ? <Alert severity="error">{errorMessage}</Alert> : null}
+      <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage('')} />
       <Card className="dashboard-content__table-card">
         <Box className="dashboard-content__header">
           <Typography className="dashboard-content__title dashboard-content__title--dark">Customer Details</Typography>

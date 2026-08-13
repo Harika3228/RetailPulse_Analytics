@@ -1,13 +1,17 @@
 import { Box, Button, Card, Chip, Stack, Typography } from '@mui/material';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext.tsx';
-import { adminOnlyItems, normalizeRole, sidebarItems, sidebarRouteMap, apiRequest } from './adminShared';
+import { adminOnlyItems, normalizeRole, sidebarItems, sidebarRouteMap } from './adminShared';
+import { queryKeys, useApiQuery } from '../../lib/queryHooks';
 import '../../styles/dashboard.css';
 
 function getSectionFromPath(pathname) {
   if (pathname.startsWith('/sales')) {
     return 'Sales';
+  }
+  if (pathname.startsWith('/analytics/sales')) {
+    return 'Sales Analytics';
   }
   if (pathname === '/notifications') {
     return 'Notifications';
@@ -37,7 +41,9 @@ export default function AdminLayout({ children }) {
   const { user, logout, token } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  const [notificationCount, setNotificationCount] = useState(0);
+
+  const notificationsQuery = useApiQuery<Array<Record<string, any>>>(queryKeys.notifications.all, '/notifications', token);
+  const notificationCount = notificationsQuery.data?.length ?? 0;
 
   const isAdmin = ['admin', 'company_admin', 'super_admin'].includes(normalizeRole(user?.role));
   const activeSection = getSectionFromPath(location.pathname);
@@ -46,27 +52,6 @@ export default function AdminLayout({ children }) {
     () => sidebarItems.filter((item) => !adminOnlyItems.has(item) || isAdmin),
     [isAdmin]
   );
-
-  useEffect(() => {
-    let mounted = true;
-    async function loadNotificationCount() {
-      if (!token) {
-        return;
-      }
-      try {
-        const payload = await apiRequest('/notifications', token);
-        if (!mounted) return;
-        setNotificationCount(Array.isArray(payload) ? payload.length : 0);
-      } catch {
-        if (!mounted) return;
-        setNotificationCount(0);
-      }
-    }
-    loadNotificationCount();
-    return () => {
-      mounted = false;
-    };
-  }, [token]);
 
   return (
     <Box className="dashboard-page">

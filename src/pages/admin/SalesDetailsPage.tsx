@@ -1,74 +1,60 @@
-import { Alert, Box, Button, Card, CardContent, Divider, Skeleton, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
-import { useCallback, useEffect, useState } from 'react';
+import { Box, Button, Card, CardContent, Divider, Skeleton, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from '@mui/material';
+import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext.tsx';
 import ConfirmDeleteDialog from '../../components/admin/ConfirmDeleteDialog.tsx';
 import SaleDialog from '../../components/admin/SaleDialog.tsx';
 import AdminLayout from './AdminLayout.tsx';
-import { apiRequest, formatCurrency } from './adminShared.js';
+import ErrorBanner from '../../components/admin/ErrorBanner.tsx';
+import { apiRequest, formatCurrency, getErrorMessage } from './adminShared.js';
 import { formatSaleDatetime, getSaleValidationError, isSaleFormIncomplete, saleFormToPayload, saleNumberOfItems, saleTransactionToForm } from './salesShared.js';
+import { queryKeys, useApiQuery } from '../../lib/queryHooks';
 
 export default function SalesDetailsPage() {
   const { transactionId } = useParams();
   const navigate = useNavigate();
   const { token } = useAuth();
+  const queryClient = useQueryClient();
 
   const [errorMessage, setErrorMessage] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [transaction, setTransaction] = useState(null);
   const [saleDialogOpen, setSaleDialogOpen] = useState(false);
   const [saleDeleteDialogOpen, setSaleDeleteDialogOpen] = useState(false);
   const [saleSubmitting, setSaleSubmitting] = useState(false);
   const [saleFormError, setSaleFormError] = useState('');
   const [saleForm, setSaleForm] = useState(null);
-  const [products, setProducts] = useState([]);
-  const [customers, setCustomers] = useState([]);
 
-  const loadCustomers = useCallback(async () => {
-    if (!token) {
-      return;
-    }
-    try {
-      const payload = await apiRequest('/sales/customers/selectable', token);
-      setCustomers(payload);
-    } catch {
-      // non-fatal
-    }
-  }, [token]);
+  const customersQuery = useApiQuery<Array<Record<string, any>>>(queryKeys.sales.customers, '/sales/customers/selectable', token);
+  const productsQuery = useApiQuery<Array<Record<string, any>>>(queryKeys.sales.products, '/sales/products/selectable', token);
+  const transactionQuery = useApiQuery<Record<string, any> | null>(
+    queryKeys.sales.detail(transactionId ?? ''),
+    `/sales/${transactionId}`,
+    token,
+    { enabled: Boolean(token && transactionId) },
+  );
 
-  const loadProducts = useCallback(async () => {
-    if (!token) {
-      return;
-    }
-    try {
-      const payload = await apiRequest('/sales/products/selectable', token);
-      setProducts(payload);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to load products');
-    }
-  }, [token]);
-
-  const loadTransaction = useCallback(async () => {
-    if (!token || !transactionId) {
-      return;
-    }
-    setLoading(true);
-    try {
-      const payload = await apiRequest(`/sales/${transactionId}`, token);
-      setTransaction(payload);
-      setSaleForm(saleTransactionToForm(payload));
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to load sales transaction');
-    } finally {
-      setLoading(false);
-    }
-  }, [token, transactionId]);
+  const customers = customersQuery.data ?? [];
+  const products = productsQuery.data ?? [];
+  const transaction = transactionQuery.data;
+  const loading = transactionQuery.isLoading;
 
   useEffect(() => {
-    loadProducts();
-    loadCustomers();
-    loadTransaction();
-  }, [loadProducts, loadCustomers, loadTransaction]);
+    if (transactionQuery.error) {
+      setErrorMessage(getErrorMessage(transactionQuery.error, 'Failed to load sales transaction'));
+    }
+  }, [transactionQuery.error]);
+
+  useEffect(() => {
+    if (transaction) {
+      setSaleForm((current) => current ?? saleTransactionToForm(transaction));
+    }
+  }, [transaction]);
+
+  const invalidateSalesData = () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.sales.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.inventory.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.summary });
+  };
 
   const openEditSale = () => {
     if (!transaction) {
@@ -96,9 +82,9 @@ export default function SalesDetailsPage() {
         body: JSON.stringify(saleFormToPayload(saleForm)),
       });
       setSaleDialogOpen(false);
-      await loadTransaction();
+      invalidateSalesData();
     } catch (error) {
-      setSaleFormError(error instanceof Error ? error.message : 'Unable to update sales transaction');
+      setSaleFormError(getErrorMessage(error, 'Unable to update sales transaction'));
     } finally {
       setSaleSubmitting(false);
     }
@@ -111,10 +97,11 @@ export default function SalesDetailsPage() {
     try {
       await apiRequest(`/sales/${transaction.transactionId}`, token, { method: 'DELETE' });
       setSaleDeleteDialogOpen(false);
+      invalidateSalesData();
       navigate('/sales');
     } catch (error) {
       setSaleDeleteDialogOpen(false);
-      setErrorMessage(error instanceof Error ? error.message : 'Unable to delete sales transaction');
+      setErrorMessage(getErrorMessage(error, 'Unable to delete sales transaction'));
     }
   };
 
@@ -122,9 +109,7 @@ export default function SalesDetailsPage() {
 
   return (
     <AdminLayout>
-      {errorMessage ? (
-        <Alert severity="error" onClose={() => setErrorMessage('')}>{errorMessage}</Alert>
-      ) : null}
+      <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage('')} />
       <Card className="dashboard-content__table-card">
         <CardContent>
           {loading ? (
@@ -159,7 +144,7 @@ export default function SalesDetailsPage() {
                   Invoice {transaction?.invoiceNumber ?? '-'}
                 </Typography>
               </Box>
-              <Stack direction="row" spacing={1}>
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                 <Button variant="outlined" onClick={() => navigate('/sales/list')}>
                   Back
                 </Button>
@@ -220,32 +205,34 @@ export default function SalesDetailsPage() {
               <Typography variant="h6" gutterBottom>
                 Product Details
               </Typography>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Product</TableCell>
-                    <TableCell>Category</TableCell>
-                    <TableCell>SKU</TableCell>
-                    <TableCell>Quantity</TableCell>
-                    <TableCell>Unit Price</TableCell>
-                    <TableCell>Line Total</TableCell>
-                    <TableCell>Remaining Stock</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {(transaction?.lines ?? []).map((line) => (
-                    <TableRow key={`${line.productId}-${line.sku}`}>
-                      <TableCell>{line.productName}</TableCell>
-                      <TableCell>{line.categoryName}</TableCell>
-                      <TableCell>{line.sku}</TableCell>
-                      <TableCell>{line.quantity}</TableCell>
-                      <TableCell>{formatCurrency(line.unitPrice)}</TableCell>
-                      <TableCell>{formatCurrency(line.lineTotal)}</TableCell>
-                      <TableCell>{line.remainingStock ?? '-'}</TableCell>
+              <TableContainer className="dashboard-table">
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Product</TableCell>
+                      <TableCell>Category</TableCell>
+                      <TableCell>SKU</TableCell>
+                      <TableCell>Quantity</TableCell>
+                      <TableCell>Unit Price</TableCell>
+                      <TableCell>Line Total</TableCell>
+                      <TableCell>Remaining Stock</TableCell>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHead>
+                  <TableBody>
+                    {(transaction?.lines ?? []).map((line) => (
+                      <TableRow key={`${line.productId}-${line.sku}`}>
+                        <TableCell>{line.productName}</TableCell>
+                        <TableCell>{line.categoryName}</TableCell>
+                        <TableCell>{line.sku}</TableCell>
+                        <TableCell>{line.quantity}</TableCell>
+                        <TableCell>{formatCurrency(line.unitPrice)}</TableCell>
+                        <TableCell>{formatCurrency(line.lineTotal)}</TableCell>
+                        <TableCell>{line.remainingStock ?? '-'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
             </Box>
 
             {firstLine ? (

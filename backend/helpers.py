@@ -2,6 +2,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
+from sqlalchemy import and_, case, desc, func
 
 from backend.database import engine
 from backend.models import (
@@ -203,6 +204,11 @@ def _is_product_active(product) -> bool:
     return (product.status or "active").lower() == "active"
 
 
+def _product_stock_expr():
+    """Effective current stock for a product, falling back to the initial stock quantity."""
+    return func.coalesce(Product.stockQuantity, Product.initialStockQuantity, 0)
+
+
 def _to_product_response(product) -> ProductResponse:
     stock_quantity = int(
         product.stockQuantity if product.stockQuantity is not None else (product.initialStockQuantity or 0)
@@ -239,15 +245,22 @@ def _get_company_product_summary(db, company_id: int) -> ProductSummaryResponse:
 
 
 def _get_company_sales_summary(db, company_id: int) -> SalesDashboardSummaryResponse:
-    transactions = db.query(SalesTransaction).filter(SalesTransaction.companyId == company_id).all()
-    total_orders = len(transactions)
-    total_revenue = sum(float(item.totalAmount or 0) for item in transactions)
-    total_sales = sum(
-        int(line.quantity or 0)
-        for line in db.query(SalesTransactionLine)
+    order_row = (
+        db.query(
+            func.count(SalesTransaction.id).label("orders"),
+            func.coalesce(func.sum(SalesTransaction.totalAmount), 0).label("revenue"),
+        )
+        .filter(SalesTransaction.companyId == company_id)
+        .first()
+    )
+    total_orders = int(order_row.orders)
+    total_revenue = float(order_row.revenue)
+    total_sales = int(
+        db.query(func.coalesce(func.sum(SalesTransactionLine.quantity), 0))
         .join(SalesTransaction, SalesTransaction.id == SalesTransactionLine.transactionId)
         .filter(SalesTransaction.companyId == company_id)
-        .all()
+        .scalar()
+        or 0
     )
     average_order_value = (total_revenue / total_orders) if total_orders else 0
     return SalesDashboardSummaryResponse(
@@ -259,25 +272,22 @@ def _get_company_sales_summary(db, company_id: int) -> SalesDashboardSummaryResp
 
 
 def _get_company_inventory_summary(db, company_id: int) -> InventoryDashboardSummaryResponse:
-    products = db.query(Product).filter(Product.companyId == company_id).all()
-    total_products = len(products)
-    total_inventory_quantity = sum(
-        int(product.stockQuantity if product.stockQuantity is not None else product.initialStockQuantity or 0)
-        for product in products
+    stock_expr = _product_stock_expr()
+    row = (
+        db.query(
+            func.count(Product.id).label("total_products"),
+            func.coalesce(func.sum(stock_expr), 0).label("total_quantity"),
+            func.sum(case((stock_expr <= 0, 1), else_=0)).label("out_of_stock"),
+            func.sum(case((and_(stock_expr > 0, stock_expr <= LOW_STOCK_THRESHOLD), 1), else_=0)).label("low_stock"),
+        )
+        .filter(Product.companyId == company_id)
+        .first()
     )
-    low_stock_products = 0
-    out_of_stock_products = 0
-    for product in products:
-        current_stock = int(product.stockQuantity if product.stockQuantity is not None else product.initialStockQuantity or 0)
-        if current_stock <= 0:
-            out_of_stock_products += 1
-        elif current_stock <= LOW_STOCK_THRESHOLD:
-            low_stock_products += 1
     return InventoryDashboardSummaryResponse(
-        totalProducts=total_products,
-        totalInventoryQuantity=total_inventory_quantity,
-        lowStockProducts=low_stock_products,
-        outOfStockProducts=out_of_stock_products,
+        totalProducts=int(row.total_products),
+        totalInventoryQuantity=int(row.total_quantity),
+        lowStockProducts=int(row.low_stock or 0),
+        outOfStockProducts=int(row.out_of_stock or 0),
     )
 
 
@@ -293,19 +303,196 @@ def _parse_dashboard_datetime(value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _build_period_series(transactions, key_func, value_func, bucket: str) -> list[dict[str, object]]:
-    series: dict[str, float] = {}
-    for transaction in transactions:
-        timestamp = transaction.saleDateTime or transaction.createdAt or datetime.now(timezone.utc)
-        if bucket == "daily":
-            label = timestamp.strftime("%Y-%m-%d")
-        elif bucket == "weekly":
-            iso_year, iso_week, _ = timestamp.isocalendar()
-            label = f"{iso_year}-W{iso_week:02d}"
-        else:
-            label = timestamp.strftime("%b %Y")
-        series[label] = series.get(label, 0.0) + float(value_func(transaction))
-    return [{"label": label, "value": round(value, 2)} for label, value in sorted(series.items())]
+def _date_bucket_expr(column, bucket: str, dialect: str):
+    """Return a SQL expression that groups a datetime column into daily/weekly/monthly buckets."""
+    if bucket == "daily":
+        return func.to_char(column, "YYYY-MM-DD") if dialect == "postgresql" else func.strftime("%Y-%m-%d", column)
+    if bucket == "weekly":
+        return func.to_char(column, 'IYYY-"W"IW') if dialect == "postgresql" else func.strftime("%Y-W%W", column)
+    return func.to_char(column, "Mon YYYY") if dialect == "postgresql" else func.strftime("%Y-%m", column)
+
+
+def _friendly_bucket_label(bucket: str, label) -> str:
+    """Normalize SQL bucket labels into a human-friendly string for any dialect."""
+    if label is None:
+        return ""
+    text = str(label)
+    if bucket == "monthly" and re.fullmatch(r"\d{4}-\d{2}", text):
+        try:
+            return datetime.strptime(text, "%Y-%m").strftime("%b %Y")
+        except ValueError:
+            return text
+    if bucket == "weekly" and re.fullmatch(r"\d{4}-W\d{2}", text):
+        return f"{text[:4]}-W{int(text[6:]):02d}"
+    return text
+
+
+def _matching_line_transaction_ids(
+    db,
+    company_id: int,
+    product: str | None = None,
+    category: str | None = None,
+    brand: str | None = None,
+):
+    """Subquery of transaction ids that contain at least one line matching product/category/brand filters."""
+    query = (
+        db.query(SalesTransactionLine.transactionId)
+        .join(Product, Product.id == SalesTransactionLine.productId)
+        .filter(SalesTransactionLine.transactionId.isnot(None))
+    )
+    if product:
+        query = query.filter(Product.name.ilike(f"%{product}%"))
+    if category:
+        category_ids = [
+            row[0]
+            for row in db.query(Category.id)
+            .filter(Category.companyId == company_id, Category.name.ilike(f"%{category}%"))
+            .all()
+        ]
+        query = query.filter(Product.categoryId.in_(category_ids))
+    if brand:
+        query = query.filter(Product.brand.ilike(f"%{brand}%"))
+    return query.distinct()
+
+
+def _base_sales_transaction_query(
+    db,
+    company_id: int,
+    from_date: datetime | None = None,
+    to_date: datetime | None = None,
+    product: str | None = None,
+    category: str | None = None,
+    brand: str | None = None,
+    sales_channel: str | None = None,
+    payment_method: str | None = None,
+    customer: str | None = None,
+):
+    """SalesTransaction query scoped to a company and all supported analytics filters."""
+    query = db.query(SalesTransaction).filter(SalesTransaction.companyId == company_id)
+    if from_date:
+        query = query.filter(SalesTransaction.saleDateTime >= from_date)
+    if to_date:
+        query = query.filter(SalesTransaction.saleDateTime <= to_date)
+    if sales_channel:
+        query = query.filter(SalesTransaction.salesChannel.ilike(f"%{sales_channel}%"))
+    if payment_method:
+        query = query.filter(SalesTransaction.paymentMethod.ilike(f"%{payment_method}%"))
+    if customer:
+        query = query.filter(SalesTransaction.customerName.ilike(f"%{customer}%"))
+    if product or category or brand:
+        query = query.filter(
+            SalesTransaction.id.in_(
+                _matching_line_transaction_ids(db, company_id, product=product, category=category, brand=brand)
+            )
+        )
+    return query
+
+
+def _base_sales_line_query(
+    db,
+    company_id: int,
+    from_date: datetime | None = None,
+    to_date: datetime | None = None,
+    product: str | None = None,
+    category: str | None = None,
+    brand: str | None = None,
+    sales_channel: str | None = None,
+    payment_method: str | None = None,
+    customer: str | None = None,
+):
+    """SalesTransactionLine query (joined to Product and SalesTransaction) scoped to a company and all filters."""
+    query = (
+        db.query(SalesTransactionLine)
+        .join(Product, Product.id == SalesTransactionLine.productId)
+        .join(SalesTransaction, SalesTransaction.id == SalesTransactionLine.transactionId)
+        .filter(SalesTransaction.companyId == company_id)
+    )
+    if from_date:
+        query = query.filter(SalesTransaction.saleDateTime >= from_date)
+    if to_date:
+        query = query.filter(SalesTransaction.saleDateTime <= to_date)
+    if sales_channel:
+        query = query.filter(SalesTransaction.salesChannel.ilike(f"%{sales_channel}%"))
+    if payment_method:
+        query = query.filter(SalesTransaction.paymentMethod.ilike(f"%{payment_method}%"))
+    if customer:
+        query = query.filter(SalesTransaction.customerName.ilike(f"%{customer}%"))
+    if product:
+        query = query.filter(Product.name.ilike(f"%{product}%"))
+    if category:
+        category_ids = [
+            row[0]
+            for row in db.query(Category.id)
+            .filter(Category.companyId == company_id, Category.name.ilike(f"%{category}%"))
+            .all()
+        ]
+        query = query.filter(Product.categoryId.in_(category_ids))
+    if brand:
+        query = query.filter(Product.brand.ilike(f"%{brand}%"))
+    return query
+
+
+def _sales_line_revenue_expr():
+    """Revenue for a line item, mirroring stored lineTotal with a unit-price fallback."""
+    return func.coalesce(
+        SalesTransactionLine.lineTotal,
+        SalesTransactionLine.unitPrice * SalesTransactionLine.quantity,
+        0,
+    )
+
+
+def _aggregated_trends(base_transactions, base_lines, dialect: str) -> tuple[dict, dict, dict]:
+    """Build daily/weekly/monthly revenue, sales-quantity and order trends via SQL GROUP BY."""
+    revenue_trend: dict[str, list[dict[str, object]]] = {}
+    sales_trend: dict[str, list[dict[str, object]]] = {}
+    order_trend: dict[str, list[dict[str, object]]] = {}
+    for bucket in ("daily", "weekly", "monthly"):
+        bucket_col = _date_bucket_expr(SalesTransaction.saleDateTime, bucket, dialect).label("bucket")
+        revenue_rows = (
+            base_transactions.with_entities(bucket_col, func.coalesce(func.sum(SalesTransaction.totalAmount), 0))
+            .group_by(bucket_col)
+            .order_by(bucket_col)
+            .all()
+        )
+        order_rows = (
+            base_transactions.with_entities(bucket_col, func.count(SalesTransaction.id))
+            .group_by(bucket_col)
+            .order_by(bucket_col)
+            .all()
+        )
+        sales_rows = (
+            base_lines.with_entities(bucket_col, func.coalesce(func.sum(SalesTransactionLine.quantity), 0))
+            .group_by(bucket_col)
+            .order_by(bucket_col)
+            .all()
+        )
+        revenue_trend[bucket] = [{"label": _friendly_bucket_label(bucket, row[0]), "value": round(float(row[1]), 2)} for row in revenue_rows]
+        sales_trend[bucket] = [{"label": _friendly_bucket_label(bucket, row[0]), "value": int(row[1])} for row in sales_rows]
+        order_trend[bucket] = [{"label": _friendly_bucket_label(bucket, row[0]), "value": int(row[1])} for row in order_rows]
+    return revenue_trend, sales_trend, order_trend
+
+
+def _dimension_distribution(base_transactions, column) -> list[dict[str, object]]:
+    """Aggregate revenue and order counts grouped by a transaction dimension (payment method, channel, status)."""
+    rows = (
+        base_transactions.with_entities(
+            func.coalesce(column, "Unknown").label("label"),
+            func.coalesce(func.sum(SalesTransaction.totalAmount), 0).label("revenue"),
+            func.count(SalesTransaction.id).label("orders"),
+        )
+        .group_by("label")
+        .order_by("label")
+        .all()
+    )
+    return [{"label": row.label, "revenue": round(float(row.revenue), 2), "orders": int(row.orders)} for row in rows]
+
+
+def _sanitized_limit(limit: int | None, default: int, maximum: int) -> int:
+    try:
+        requested = int(limit or default)
+    except (TypeError, ValueError):
+        requested = default
+    return max(1, min(requested, maximum))
 
 
 def _get_company_analytics_summary(
@@ -318,159 +505,196 @@ def _get_company_analytics_summary(
     brand: str | None = None,
     sales_channel: str | None = None,
     payment_method: str | None = None,
+    customer: str | None = None,
 ) -> AnalyticsDashboardResponse:
     from_date = _parse_dashboard_datetime(date_from)
     to_date = _parse_dashboard_datetime(date_to)
+    dialect = db.bind.dialect.name
 
-    transactions_query = db.query(SalesTransaction).filter(SalesTransaction.companyId == company_id)
-    if from_date:
-        transactions_query = transactions_query.filter(SalesTransaction.saleDateTime >= from_date)
-    if to_date:
-        transactions_query = transactions_query.filter(SalesTransaction.saleDateTime <= to_date)
-    if sales_channel:
-        transactions_query = transactions_query.filter(SalesTransaction.salesChannel.ilike(f"%{sales_channel}%"))
-    if payment_method:
-        transactions_query = transactions_query.filter(SalesTransaction.paymentMethod.ilike(f"%{payment_method}%"))
-
-    transactions = transactions_query.all()
-    total_orders = len(transactions)
-    total_revenue = sum(float(item.totalAmount or 0) for item in transactions)
-    line_query = (
-        db.query(SalesTransactionLine, Product, SalesTransaction)
-        .join(Product, Product.id == SalesTransactionLine.productId)
-        .join(SalesTransaction, SalesTransaction.id == SalesTransactionLine.transactionId)
-        .filter(SalesTransaction.companyId == company_id)
+    base_transactions = _base_sales_transaction_query(
+        db,
+        company_id,
+        from_date=from_date,
+        to_date=to_date,
+        product=product,
+        category=category,
+        brand=brand,
+        sales_channel=sales_channel,
+        payment_method=payment_method,
+        customer=customer,
     )
-    if from_date:
-        line_query = line_query.filter(SalesTransaction.saleDateTime >= from_date)
-    if to_date:
-        line_query = line_query.filter(SalesTransaction.saleDateTime <= to_date)
-    if sales_channel:
-        line_query = line_query.filter(SalesTransaction.salesChannel.ilike(f"%{sales_channel}%"))
-    if payment_method:
-        line_query = line_query.filter(SalesTransaction.paymentMethod.ilike(f"%{payment_method}%"))
-    if product:
-        line_query = line_query.filter(Product.name.ilike(f"%{product}%"))
-    if category:
-        line_query = line_query.filter(Product.categoryId == db.query(Category.id).filter(Category.companyId == company_id, Category.name.ilike(f"%{category}%")).scalar())
-    if brand:
-        line_query = line_query.filter(Product.brand.ilike(f"%{brand}%"))
-    line_rows = line_query.all()
-    total_products_sold = sum(int(line.quantity or 0) for line, _, _ in line_rows)
+    base_lines = _base_sales_line_query(
+        db,
+        company_id,
+        from_date=from_date,
+        to_date=to_date,
+        product=product,
+        category=category,
+        brand=brand,
+        sales_channel=sales_channel,
+        payment_method=payment_method,
+        customer=customer,
+    )
+
+    kpi_row = (
+        base_transactions.with_entities(
+            func.count(SalesTransaction.id).label("orders"),
+            func.coalesce(func.sum(SalesTransaction.totalAmount), 0).label("revenue"),
+            func.coalesce(func.sum(SalesTransaction.discountAmount), 0).label("discount"),
+            func.coalesce(func.sum(SalesTransaction.taxAmount), 0).label("tax"),
+        )
+        .first()
+    )
+    total_orders = int(kpi_row.orders)
+    total_revenue = float(kpi_row.revenue)
+    total_discount = float(kpi_row.discount)
+    total_tax = float(kpi_row.tax)
+    total_products_sold = int(base_lines.with_entities(func.coalesce(func.sum(SalesTransactionLine.quantity), 0)).scalar() or 0)
     average_order_value = (total_revenue / total_orders) if total_orders else 0
 
-    transaction_quantities = {}
-    for line, _, transaction in line_rows:
-        transaction_quantities[transaction.id] = transaction_quantities.get(transaction.id, 0) + int(line.quantity or 0)
+    revenue_trend, sales_trend, order_trend = _aggregated_trends(base_transactions, base_lines, dialect)
 
-    revenue_trend = {
-        "daily": _build_period_series(transactions, lambda transaction: transaction.id, lambda transaction: float(transaction.totalAmount or 0), "daily"),
-        "weekly": _build_period_series(transactions, lambda transaction: transaction.id, lambda transaction: float(transaction.totalAmount or 0), "weekly"),
-        "monthly": _build_period_series(transactions, lambda transaction: transaction.id, lambda transaction: float(transaction.totalAmount or 0), "monthly"),
-    }
-    sales_trend = {
-        "daily": _build_period_series(transactions, lambda transaction: transaction.id, lambda transaction: transaction_quantities.get(transaction.id, 0), "daily"),
-        "weekly": _build_period_series(transactions, lambda transaction: transaction.id, lambda transaction: transaction_quantities.get(transaction.id, 0), "weekly"),
-        "monthly": _build_period_series(transactions, lambda transaction: transaction.id, lambda transaction: transaction_quantities.get(transaction.id, 0), "monthly"),
-    }
-
-    product_totals: dict[int, dict[str, object]] = {}
-    for line, product, _ in line_rows:
-        entry = product_totals.setdefault(
-            product.id,
-            {"name": product.name or "Unknown", "quantity": 0, "revenue": 0.0},
+    product_rows = (
+        base_lines.with_entities(
+            Product.id,
+            func.coalesce(func.sum(SalesTransactionLine.quantity), 0).label("quantity"),
+            _sales_line_revenue_expr().label("revenue"),
         )
-        entry["quantity"] = int(entry["quantity"]) + int(line.quantity or 0)
-        entry["revenue"] = float(entry["revenue"]) + float(line.lineTotal or 0 or (line.unitPrice or 0) * (line.quantity or 0))
-    top_selling_products = [
-        {"name": entry["name"], "quantity": entry["quantity"], "revenue": round(float(entry["revenue"]), 2)}
-        for entry in sorted(product_totals.values(), key=lambda item: int(item["quantity"]), reverse=True)[:10]
-    ]
-
-    category_totals: dict[int, dict[str, object]] = {}
-    for line, product, _ in line_rows:
-        category_id = product.categoryId or 0
-        if not category_id:
-            continue
-        category = db.query(Category).filter(Category.id == category_id).first()
-        category_name = category.name if category else "Uncategorized"
-        entry = category_totals.setdefault(
-            category_id,
-            {"name": category_name, "revenue": 0.0, "quantity": 0},
-        )
-        entry["revenue"] = float(entry["revenue"]) + float(line.lineTotal or 0 or ((line.unitPrice or 0) * (line.quantity or 0)))
-        entry["quantity"] = int(entry["quantity"]) + int(line.quantity or 0)
-    top_performing_categories = [
-        {"name": entry["name"], "revenue": round(float(entry["revenue"]), 2), "unitsSold": entry["quantity"]}
-        for entry in sorted(category_totals.values(), key=lambda item: float(item["revenue"]), reverse=True)[:10]
-    ]
-
-    payment_method_totals: dict[str, float] = {}
-    sales_channel_totals: dict[str, float] = {}
-    for transaction in transactions:
-        payment_method = transaction.paymentMethod or "Unknown"
-        sales_channel = transaction.salesChannel or "Unknown"
-        payment_method_totals[payment_method] = payment_method_totals.get(payment_method, 0.0) + float(transaction.totalAmount or 0)
-        sales_channel_totals[sales_channel] = sales_channel_totals.get(sales_channel, 0.0) + float(transaction.totalAmount or 0)
-    sales_by_payment_method = [
-        {"label": method, "value": round(amount, 2)} for method, amount in sorted(payment_method_totals.items())
-    ]
-    sales_by_sales_channel = [
-        {"label": channel, "value": round(amount, 2)} for channel, amount in sorted(sales_channel_totals.items())
-    ]
-
-    products_query = db.query(Product).filter(Product.companyId == company_id)
-    products = products_query.all()
-    total_inventory_value = sum(
-        float(product.unitPrice or 0) * int(product.stockQuantity if product.stockQuantity is not None else product.initialStockQuantity or 0)
-        for product in products
+        .group_by(Product.id)
+        .order_by(desc("quantity"))
+        .limit(10)
+        .all()
     )
-    low_stock_products = 0
-    out_of_stock_products = 0
-    inventory_distribution: dict[int, dict[str, object]] = {}
-    inventory_value_by_category: dict[int, dict[str, object]] = {}
-    top_low_stock_products: list[dict[str, object]] = []
-    out_of_stock_product_items: list[dict[str, object]] = []
-    for product in products:
-        current_stock = int(product.stockQuantity if product.stockQuantity is not None else product.initialStockQuantity or 0)
-        if current_stock <= 0:
-            out_of_stock_products += 1
-            out_of_stock_product_items.append({
-                "name": product.name or "Unknown",
-                "sku": product.sku or "",
-                "category": product.categoryId or "",
-            })
-        elif current_stock <= LOW_STOCK_THRESHOLD:
-            low_stock_products += 1
-            top_low_stock_products.append({
-                "name": product.name or "Unknown",
-                "stock": current_stock,
-                "sku": product.sku or "",
-            })
+    product_ids = [row[0] for row in product_rows]
+    product_names: dict[int, str] = {}
+    if product_ids:
+        product_names = {
+            row.id: row.name
+            for row in db.query(Product.id, Product.name).filter(Product.id.in_(product_ids)).all()
+        }
+    top_selling_products = [
+        {"name": product_names.get(row[0], "Unknown"), "quantity": int(row[1]), "revenue": round(float(row[2]), 2)}
+        for row in product_rows
+    ]
 
-        category = db.query(Category).filter(Category.id == product.categoryId).first() if product.categoryId else None
-        category_name = category.name if category else "Uncategorized"
-        category_entry = inventory_distribution.setdefault(
-            product.categoryId or 0,
-            {"name": category_name, "value": 0},
+    category_rows = (
+        base_lines.with_entities(
+            Product.categoryId,
+            _sales_line_revenue_expr().label("revenue"),
+            func.coalesce(func.sum(SalesTransactionLine.quantity), 0).label("units"),
         )
-        category_entry["value"] = int(category_entry["value"]) + current_stock
+        .filter(Product.categoryId.isnot(None), Product.categoryId != 0)
+        .group_by(Product.categoryId)
+        .order_by(desc("revenue"))
+        .limit(10)
+        .all()
+    )
+    category_ids = [row[0] for row in category_rows]
+    category_names: dict[int, str] = {}
+    if category_ids:
+        category_names = {
+            row.id: row.name
+            for row in db.query(Category.id, Category.name).filter(Category.id.in_(category_ids)).all()
+        }
+    top_performing_categories = [
+        {"name": category_names.get(row[0], "Uncategorized"), "revenue": round(float(row[1]), 2), "unitsSold": int(row[2])}
+        for row in category_rows
+    ]
 
-        inventory_value_entry = inventory_value_by_category.setdefault(
-            product.categoryId or 0,
-            {"name": category_name, "value": 0.0},
+    payment_rows = _dimension_distribution(base_transactions, SalesTransaction.paymentMethod)
+    channel_rows = _dimension_distribution(base_transactions, SalesTransaction.salesChannel)
+    status_rows = _dimension_distribution(base_transactions, SalesTransaction.paymentStatus)
+    sales_by_payment_method = [{"label": entry["label"], "value": entry["revenue"]} for entry in payment_rows]
+    orders_by_payment_method = [{"label": entry["label"], "value": entry["orders"]} for entry in payment_rows]
+    sales_by_sales_channel = [{"label": entry["label"], "value": entry["revenue"]} for entry in channel_rows]
+    orders_by_sales_channel = [{"label": entry["label"], "value": entry["orders"]} for entry in channel_rows]
+    sales_by_payment_status = [{"label": entry["label"], "value": entry["revenue"]} for entry in status_rows]
+
+    stock_expr = _product_stock_expr()
+    inventory_metrics = (
+        db.query(
+            func.count(Product.id).label("product_count"),
+            func.coalesce(func.sum(Product.unitPrice * stock_expr), 0).label("inventory_value"),
+            func.sum(case((stock_expr <= 0, 1), else_=0)).label("out_of_stock"),
+            func.sum(case((and_(stock_expr > 0, stock_expr <= LOW_STOCK_THRESHOLD), 1), else_=0)).label("low_stock"),
         )
-        inventory_value_entry["value"] = float(inventory_value_entry["value"]) + float(product.unitPrice or 0) * current_stock
+        .filter(Product.companyId == company_id)
+        .first()
+    )
+    total_inventory_value = float(inventory_metrics.inventory_value)
+    low_stock_products = int(inventory_metrics.low_stock or 0)
+    out_of_stock_products = int(inventory_metrics.out_of_stock or 0)
+    product_count = int(inventory_metrics.product_count)
 
-    top_low_stock_products = sorted(top_low_stock_products, key=lambda item: int(item["stock"]))[:10]
-    out_of_stock_product_items = sorted(out_of_stock_product_items, key=lambda item: str(item["name"]))
+    category_inventory_rows = (
+        db.query(
+            func.coalesce(Product.categoryId, 0).label("category_id"),
+            func.coalesce(func.sum(stock_expr), 0).label("quantity"),
+            func.coalesce(func.sum(Product.unitPrice * stock_expr), 0).label("value"),
+        )
+        .filter(Product.companyId == company_id)
+        .group_by("category_id")
+        .all()
+    )
+    inventory_category_ids = [row.category_id for row in category_inventory_rows if row.category_id]
+    inventory_category_names: dict[int, str] = {}
+    if inventory_category_ids:
+        inventory_category_names = {
+            row.id: row.name
+            for row in db.query(Category.id, Category.name).filter(Category.id.in_(inventory_category_ids)).all()
+        }
+    inventory_distribution = [
+        {"name": inventory_category_names.get(row.category_id, "Uncategorized"), "value": int(row.quantity)}
+        for row in category_inventory_rows
+    ]
+    inventory_distribution.sort(key=lambda item: int(item["value"]), reverse=True)
+    inventory_value_by_category = [
+        {"name": inventory_category_names.get(row.category_id, "Uncategorized"), "value": round(float(row.value), 2)}
+        for row in category_inventory_rows
+    ]
+    inventory_value_by_category.sort(key=lambda item: float(item["value"]), reverse=True)
+
+    top_low_stock_rows = (
+        db.query(Product.name, Product.sku, stock_expr.label("stock"))
+        .filter(Product.companyId == company_id, stock_expr > 0, stock_expr <= LOW_STOCK_THRESHOLD)
+        .order_by(stock_expr, Product.id)
+        .limit(10)
+        .all()
+    )
+    top_low_stock_products = [
+        {"name": row.name or "Unknown", "stock": int(row.stock), "sku": row.sku or ""}
+        for row in top_low_stock_rows
+    ]
+    out_of_stock_rows = (
+        db.query(Product.name, Product.sku, Product.categoryId)
+        .filter(Product.companyId == company_id, stock_expr <= 0)
+        .order_by(Product.name)
+        .all()
+    )
+    out_of_stock_product_items = [
+        {"name": row.name or "Unknown", "sku": row.sku or "", "category": row.categoryId or ""}
+        for row in out_of_stock_rows
+    ]
 
     total_categories = db.query(Category).filter(Category.companyId == company_id).count()
-    customers = db.query(Customer).filter(Customer.companyId == company_id).all()
+    top_customer_rows = (
+        db.query(Customer.name, Customer.totalSpend, Customer.purchaseCount)
+        .filter(Customer.companyId == company_id)
+        .order_by(desc(func.coalesce(Customer.totalSpend, 0)), Customer.id)
+        .limit(8)
+        .all()
+    )
     top_customers_by_revenue = [
-        {"name": customer.name or "Unknown", "revenue": round(float(customer.totalSpend or 0), 2), "orders": int(customer.purchaseCount or 0)}
-        for customer in sorted(customers, key=lambda item: float(item.totalSpend or 0), reverse=True)[:8]
+        {"name": row.name or "Unknown", "revenue": round(float(row.totalSpend or 0), 2), "orders": int(row.purchaseCount or 0)}
+        for row in top_customer_rows
     ]
+    recent_customer_rows = (
+        db.query(Customer)
+        .filter(Customer.companyId == company_id)
+        .order_by(desc(func.coalesce(Customer.createdAt, datetime.now(timezone.utc))), Customer.id)
+        .limit(5)
+        .all()
+    )
     recent_customers = [
         {
             "id": customer.id,
@@ -480,20 +704,28 @@ def _get_company_analytics_summary(
             "purchaseCount": int(customer.purchaseCount or 0),
             "totalSpend": round(float(customer.totalSpend or 0), 2),
         }
-        for customer in sorted(customers, key=lambda item: item.createdAt or datetime.now(timezone.utc), reverse=True)[:5]
+        for customer in recent_customer_rows
     ]
+    month_expr = _date_bucket_expr(Customer.createdAt, "monthly", dialect)
+    growth_rows = (
+        db.query(month_expr.label("month"), func.count(Customer.id))
+        .filter(Customer.companyId == company_id)
+        .group_by(month_expr)
+        .all()
+    )
+    customer_count_by_month = {row.month: int(row[1]) for row in growth_rows}
     customer_growth_trend = []
     for month_index in range(6):
         month_date = datetime.now(timezone.utc).replace(day=1) - timedelta(days=30 * month_index)
         month_label = month_date.strftime("%b %Y")
-        month_count = sum(
-            1
-            for customer in customers
-            if customer.createdAt and customer.createdAt.year == month_date.year and customer.createdAt.month == month_date.month
-        )
-        customer_growth_trend.append({"month": month_label, "customers": month_count})
+        customer_growth_trend.append({"month": month_label, "customers": customer_count_by_month.get(month_label, 0)})
     customer_growth_trend.reverse()
-    total_customer_revenue = sum(float(customer.totalSpend or 0) for customer in customers)
+    total_customer_revenue = float(
+        db.query(func.coalesce(func.sum(Customer.totalSpend), 0))
+        .filter(Customer.companyId == company_id)
+        .scalar()
+        or 0
+    )
     customer_revenue_contribution = []
     for customer in top_customers_by_revenue:
         share = round((customer["revenue"] / total_customer_revenue) * 100, 2) if total_customer_revenue else 0
@@ -503,34 +735,212 @@ def _get_company_analytics_summary(
         totalOrders=total_orders,
         totalProductsSold=total_products_sold,
         averageOrderValue=average_order_value,
+        totalDiscount=total_discount,
+        totalTax=total_tax,
         totalInventoryValue=total_inventory_value,
         lowStockProducts=low_stock_products,
         outOfStockProducts=out_of_stock_products,
         totalCategories=total_categories,
         revenueTrend=revenue_trend,
         salesTrend=sales_trend,
+        orderTrend=order_trend,
         topSellingProducts=top_selling_products,
         topPerformingCategories=top_performing_categories,
         salesByPaymentMethod=sales_by_payment_method,
         salesBySalesChannel=sales_by_sales_channel,
+        salesByPaymentStatus=sales_by_payment_status,
+        ordersBySalesChannel=orders_by_sales_channel,
+        ordersByPaymentMethod=orders_by_payment_method,
         inventoryDistributionByCategory=[
-            {"name": entry["name"], "value": int(entry["value"])} for entry in sorted(inventory_distribution.values(), key=lambda item: int(item["value"]), reverse=True)
+            {"name": entry["name"], "value": int(entry["value"])} for entry in inventory_distribution
         ],
         stockStatusSummary={
-            "inStock": len(products) - low_stock_products - out_of_stock_products,
+            "inStock": product_count - low_stock_products - out_of_stock_products,
             "lowStock": low_stock_products,
             "outOfStock": out_of_stock_products,
         },
         topLowStockProducts=top_low_stock_products,
         outOfStockProductDetails=out_of_stock_product_items,
         inventoryValueByCategory=[
-            {"name": entry["name"], "value": round(float(entry["value"]), 2)} for entry in sorted(inventory_value_by_category.values(), key=lambda item: float(item["value"]), reverse=True)
+            {"name": entry["name"], "value": round(float(entry["value"]), 2)} for entry in inventory_value_by_category
         ],
         topCustomersByRevenue=top_customers_by_revenue,
         recentCustomers=recent_customers,
         customerGrowthTrend=customer_growth_trend,
         customerRevenueContribution=customer_revenue_contribution,
     )
+
+
+def _get_company_sales_analytics(
+    db,
+    company_id: int,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    product: str | None = None,
+    category: str | None = None,
+    brand: str | None = None,
+    sales_channel: str | None = None,
+    payment_method: str | None = None,
+    customer: str | None = None,
+) -> dict[str, object]:
+    from_date = _parse_dashboard_datetime(date_from)
+    to_date = _parse_dashboard_datetime(date_to)
+    dialect = db.bind.dialect.name
+
+    base_transactions = _base_sales_transaction_query(
+        db,
+        company_id,
+        from_date=from_date,
+        to_date=to_date,
+        product=product,
+        category=category,
+        brand=brand,
+        sales_channel=sales_channel,
+        payment_method=payment_method,
+        customer=customer,
+    )
+    base_lines = _base_sales_line_query(
+        db,
+        company_id,
+        from_date=from_date,
+        to_date=to_date,
+        product=product,
+        category=category,
+        brand=brand,
+        sales_channel=sales_channel,
+        payment_method=payment_method,
+        customer=customer,
+    )
+
+    kpi_row = (
+        base_transactions.with_entities(
+            func.count(SalesTransaction.id).label("orders"),
+            func.coalesce(func.sum(SalesTransaction.totalAmount), 0).label("revenue"),
+            func.coalesce(func.sum(SalesTransaction.discountAmount), 0).label("discount"),
+            func.coalesce(func.sum(SalesTransaction.taxAmount), 0).label("tax"),
+        )
+        .first()
+    )
+    total_orders = int(kpi_row.orders)
+    total_revenue = float(kpi_row.revenue)
+    total_discount = float(kpi_row.discount)
+    total_tax = float(kpi_row.tax)
+    total_products_sold = int(base_lines.with_entities(func.coalesce(func.sum(SalesTransactionLine.quantity), 0)).scalar() or 0)
+    average_order_value = (total_revenue / total_orders) if total_orders else 0
+
+    revenue_trend, sales_trend, order_trend = _aggregated_trends(base_transactions, base_lines, dialect)
+
+    payment_rows = _dimension_distribution(base_transactions, SalesTransaction.paymentMethod)
+    payment_methods = [
+        {"paymentMethod": entry["label"], "revenue": entry["revenue"], "orders": entry["orders"]}
+        for entry in payment_rows
+    ]
+    payment_methods.sort(key=lambda item: item["revenue"], reverse=True)
+
+    return {
+        "totalRevenue": round(total_revenue, 2),
+        "totalOrders": total_orders,
+        "totalProductsSold": total_products_sold,
+        "averageOrderValue": round(average_order_value, 2),
+        "totalDiscount": round(total_discount, 2),
+        "totalTax": round(total_tax, 2),
+        "revenueTrend": revenue_trend,
+        "salesTrend": sales_trend,
+        "orderTrend": order_trend,
+        "paymentMethods": payment_methods,
+    }
+
+
+def _get_company_top_products(
+    db,
+    company_id: int,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    product: str | None = None,
+    category: str | None = None,
+    brand: str | None = None,
+    sales_channel: str | None = None,
+    payment_method: str | None = None,
+    customer: str | None = None,
+    limit: int | None = 50,
+) -> list[dict[str, object]]:
+    from_date = _parse_dashboard_datetime(date_from)
+    to_date = _parse_dashboard_datetime(date_to)
+    base_lines = _base_sales_line_query(
+        db,
+        company_id,
+        from_date=from_date,
+        to_date=to_date,
+        product=product,
+        category=category,
+        brand=brand,
+        sales_channel=sales_channel,
+        payment_method=payment_method,
+        customer=customer,
+    )
+    rows = (
+        base_lines.with_entities(
+            Product.name,
+            Product.sku,
+            func.coalesce(func.sum(SalesTransactionLine.quantity), 0).label("quantity"),
+            _sales_line_revenue_expr().label("revenue"),
+        )
+        .group_by(Product.id, Product.name, Product.sku)
+        .order_by(desc("revenue"))
+        .limit(_sanitized_limit(limit, 50, 200))
+        .all()
+    )
+    return [
+        {"name": row.name, "sku": row.sku, "quantity": int(row.quantity), "revenue": round(float(row.revenue), 2)}
+        for row in rows
+    ]
+
+
+def _get_company_top_customers(
+    db,
+    company_id: int,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    sales_channel: str | None = None,
+    payment_method: str | None = None,
+    customer: str | None = None,
+    limit: int | None = 20,
+) -> list[dict[str, object]]:
+    from_date = _parse_dashboard_datetime(date_from)
+    to_date = _parse_dashboard_datetime(date_to)
+    query = db.query(SalesTransaction).filter(SalesTransaction.companyId == company_id)
+    if from_date:
+        query = query.filter(SalesTransaction.saleDateTime >= from_date)
+    if to_date:
+        query = query.filter(SalesTransaction.saleDateTime <= to_date)
+    if sales_channel:
+        query = query.filter(SalesTransaction.salesChannel.ilike(f"%{sales_channel}%"))
+    if payment_method:
+        query = query.filter(SalesTransaction.paymentMethod.ilike(f"%{payment_method}%"))
+    if customer:
+        query = query.filter(SalesTransaction.customerName.ilike(f"%{customer}%"))
+
+    name_expr = func.coalesce(SalesTransaction.customerName, "Walk-in Customer")
+    rows = (
+        query.with_entities(
+            name_expr.label("name"),
+            func.count(SalesTransaction.id).label("orders"),
+            func.coalesce(func.sum(SalesTransaction.totalAmount), 0).label("total_spend"),
+        )
+        .group_by(SalesTransaction.customerId, name_expr)
+        .order_by(desc("total_spend"))
+        .limit(_sanitized_limit(limit, 20, 200))
+        .all()
+    )
+    return [
+        {
+            "name": row.name,
+            "orders": int(row.orders),
+            "totalSpend": round(float(row.total_spend), 2),
+            "averageOrderValue": round(float(row.total_spend) / int(row.orders), 2) if int(row.orders) else 0.0,
+        }
+        for row in rows
+    ]
 
 
 def _product_category_snapshot(db, category_id: int) -> tuple[int, str]:

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.tsx';
+import { getErrorMessage } from '../lib/errors.js';
 import { useState } from 'react';
 import '../styles/register.css';
 
@@ -42,7 +43,7 @@ export default function RegisterPage() {
       await register({ ...data });
       navigate('/dashboard');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to create your company account';
+      const message = getErrorMessage(error, 'Unable to create your company account');
       setSubmitError(message);
     }
   };

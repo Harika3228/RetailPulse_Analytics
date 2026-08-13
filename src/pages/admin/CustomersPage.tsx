@@ -1,5 +1,4 @@
 import {
-  Alert,
   Box,
   Button,
   Card,
@@ -14,16 +13,20 @@ import {
   TableCell,
   TableContainer,
   TableHead,
+  TablePagination,
   TableRow,
   TextField,
   Tooltip,
   Typography,
 } from '@mui/material';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext.tsx';
 import AdminLayout from './AdminLayout.tsx';
-import { apiRequest, formatCurrency, formatDate } from './adminShared';
+import ErrorBanner from '../../components/admin/ErrorBanner.tsx';
+import { apiRequest, formatCurrency, formatDate, getErrorMessage } from './adminShared';
+import { queryKeys, useApiQuery, useDebouncedValue, useTablePagination } from '../../lib/queryHooks';
 import CustomerDialog, { validateCustomerForm } from '../../components/admin/CustomerDialog.tsx';
 import CustomerSegmentBadge from '../../components/admin/CustomerSegmentBadge.tsx';
 import ConfirmDeleteDialog from '../../components/admin/ConfirmDeleteDialog.tsx';
@@ -48,10 +51,8 @@ const defaultCustomerForm = {
 export default function CustomersPage() {
   const { token } = useAuth();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [errorMessage, setErrorMessage] = useState('');
-  const [customers, setCustomers] = useState<Array<Record<string, any>>>([]);
-  const [analytics, setAnalytics] = useState<Record<string, any> | null>(null);
-  const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [segmentFilter, setSegmentFilter] = useState('all');
@@ -65,6 +66,13 @@ export default function CustomersPage() {
   const [sortBy, setSortBy] = useState('customerSince');
   const [selectedCustomer, setSelectedCustomer] = useState<Record<string, any> | null>(null);
 
+  const debouncedQuery = useDebouncedValue(query);
+  const debouncedCity = useDebouncedValue(cityFilter);
+  const debouncedState = useDebouncedValue(stateFilter);
+  const debouncedCountry = useDebouncedValue(countryFilter);
+
+  const { page, setPage, rowsPerPage, setRowsPerPage } = useTablePagination(10);
+
   const [customerDialogOpen, setCustomerDialogOpen] = useState(false);
   const [customerFormError, setCustomerFormError] = useState('');
   const [customerFormErrors, setCustomerFormErrors] = useState<Record<string, string>>({});
@@ -74,13 +82,10 @@ export default function CustomersPage() {
   const [customerDeleteDialogOpen, setCustomerDeleteDialogOpen] = useState(false);
   const [deletingCustomer, setDeletingCustomer] = useState<Record<string, any> | null>(null);
 
-  const loadCustomers = useCallback(async () => {
-    if (!token) {
-      return;
-    }
+  const customerParams = useMemo(() => {
     const params = new URLSearchParams();
-    if (query.trim()) {
-      params.set('q', query.trim());
+    if (debouncedQuery.trim()) {
+      params.set('q', debouncedQuery.trim());
     }
     if (statusFilter !== 'all') {
       params.set('status_filter', statusFilter);
@@ -94,14 +99,14 @@ export default function CustomersPage() {
     if (channelFilter !== 'all') {
       params.set('sales_channel', channelFilter);
     }
-    if (cityFilter.trim()) {
-      params.set('city', cityFilter.trim());
+    if (debouncedCity.trim()) {
+      params.set('city', debouncedCity.trim());
     }
-    if (stateFilter.trim()) {
-      params.set('state', stateFilter.trim());
+    if (debouncedState.trim()) {
+      params.set('state', debouncedState.trim());
     }
-    if (countryFilter.trim()) {
-      params.set('country', countryFilter.trim());
+    if (debouncedCountry.trim()) {
+      params.set('country', debouncedCountry.trim());
     }
     if (registeredFrom) {
       params.set('registeredFrom', registeredFrom);
@@ -111,33 +116,29 @@ export default function CustomersPage() {
     }
     params.set('sortBy', sortBy);
     params.set('sortOrder', 'desc');
+    return params.toString();
+  }, [debouncedQuery, statusFilter, segmentFilter, customerTypeFilter, channelFilter, debouncedCity, debouncedState, debouncedCountry, registeredFrom, registeredTo, sortBy]);
 
-    try {
-      const payload = await apiRequest(`/customers?${params.toString()}`, token);
-      setCustomers(payload);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to load customers');
-    } finally {
-      setLoading(false);
-    }
-  }, [token, query, statusFilter, segmentFilter, customerTypeFilter, channelFilter, cityFilter, stateFilter, countryFilter, registeredFrom, registeredTo, sortBy]);
+  const customersQuery = useApiQuery<Array<Record<string, any>>>(queryKeys.customers.list(customerParams), `/customers?${customerParams}`, token);
+  const analyticsQuery = useApiQuery<Record<string, any> | null>(queryKeys.customers.analytics, '/customers/analytics', token);
 
-  const loadAnalytics = useCallback(async () => {
-    if (!token) {
-      return;
-    }
-    try {
-      const payload = await apiRequest('/customers/analytics', token);
-      setAnalytics(payload);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to load analytics');
-    }
-  }, [token]);
+  const customers = customersQuery.data ?? [];
+  const analytics = analyticsQuery.data;
 
   useEffect(() => {
-    loadCustomers();
-    loadAnalytics();
-  }, [loadCustomers, loadAnalytics]);
+    setPage(0);
+  }, [customerParams, setPage]);
+
+  const queryError = customersQuery.error ?? analyticsQuery.error;
+  useEffect(() => {
+    if (queryError) {
+      setErrorMessage(getErrorMessage(queryError, 'Failed to load customers'));
+    }
+  }, [queryError]);
+
+  const invalidateCustomers = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
+  }, [queryClient]);
 
   const openAddCustomer = () => {
     setCustomerForm(defaultCustomerForm);
@@ -195,10 +196,9 @@ export default function CustomersPage() {
       }
 
       setCustomerDialogOpen(false);
-      await loadCustomers();
-      await loadAnalytics();
+      invalidateCustomers();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to save customer';
+      const message = getErrorMessage(error, 'Unable to save customer');
       setCustomerFormError(message);
 
       const lower = message.toLowerCase();
@@ -226,12 +226,11 @@ export default function CustomersPage() {
       if (selectedCustomer?.id === deletingCustomer.id) {
         setSelectedCustomer(null);
       }
-      await loadCustomers();
-      await loadAnalytics();
+      invalidateCustomers();
     } catch (error) {
       setCustomerDeleteDialogOpen(false);
       setDeletingCustomer(null);
-      setErrorMessage(error instanceof Error ? error.message : 'Unable to delete customer');
+      setErrorMessage(getErrorMessage(error, 'Unable to delete customer'));
     }
   };
 
@@ -242,10 +241,9 @@ export default function CustomersPage() {
         method: 'PATCH',
         body: JSON.stringify({ status: checked ? 'active' : 'inactive' }),
       });
-      await loadCustomers();
-      await loadAnalytics();
+      invalidateCustomers();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Unable to update customer status');
+      setErrorMessage(getErrorMessage(error, 'Unable to update customer status'));
     }
   };
 
@@ -264,9 +262,13 @@ export default function CustomersPage() {
     return analytics.segmentationSummary as Array<Record<string, any>>;
   }, [analytics]);
 
+  const pagedCustomers = useMemo(() => {
+    return customers.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
+  }, [customers, page, rowsPerPage]);
+
   return (
     <AdminLayout>
-      {errorMessage ? <Alert severity="error" onClose={() => setErrorMessage('')}>{errorMessage}</Alert> : null}
+      <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage('')} />
       <Card className="dashboard-content__table-card">
         <Box className="dashboard-content__header">
           <Typography className="dashboard-content__title dashboard-content__title--dark">Customers</Typography>
@@ -319,7 +321,7 @@ export default function CustomersPage() {
             <MenuItem value="totalOrders">Sort: Total Orders</MenuItem>
             <MenuItem value="lastPurchase">Sort: Last Purchase</MenuItem>
           </TextField>
-          <Button variant="outlined" onClick={() => { void loadCustomers(); }}>
+          <Button variant="outlined" onClick={() => { void customersQuery.refetch(); }}>
             Apply
           </Button>
         </Box>
@@ -341,7 +343,7 @@ export default function CustomersPage() {
           </Stack>
         ) : null}
 
-        {loading ? (
+        {customersQuery.isLoading ? (
           <Stack spacing={1} sx={{ p: 2 }}>
             {[1, 2, 3, 4, 5].map((i) => (
               <Skeleton key={i} variant="rounded" height={48} />
@@ -357,71 +359,85 @@ export default function CustomersPage() {
             </Typography>
           </Box>
         ) : (
-          <TableContainer className="dashboard-table">
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableCell>Customer Name</TableCell>
-                  <TableCell>Email</TableCell>
-                  <TableCell>Phone Number</TableCell>
-                  <TableCell>Customer Segment</TableCell>
-                  <TableCell>Total Purchases</TableCell>
-                  <TableCell>Total Spend</TableCell>
-                  <TableCell>Status</TableCell>
-                  <TableCell>Actions</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {customers.map((customer) => (
-                  <TableRow key={customer.id} hover onClick={() => setSelectedCustomer(customer)} sx={{ cursor: 'pointer' }}>
-                    <TableCell>
-                      <Typography variant="subtitle2">{customer.name}</Typography>
-                      <Typography variant="body2" color="text.secondary">{customer.city || '-'}</Typography>
-                    </TableCell>
-                    <TableCell>{customer.email}</TableCell>
-                    <TableCell>{customer.phone || '-'}</TableCell>
-                    <TableCell>
-                      <CustomerSegmentBadge segment={customer.segment} />
-                    </TableCell>
-                    <TableCell>{customer.purchaseCount ?? 0}</TableCell>
-                    <TableCell>{formatCurrency(customer.totalSpend)}</TableCell>
-                    <TableCell>
-                      <Stack direction="row" spacing={1} alignItems="center">
-                        <Typography variant="body2">{customer.status === 'active' ? 'Active' : 'Inactive'}</Typography>
-                        <Switch
-                          size="small"
-                          checked={customer.status === 'active'}
-                          onChange={(event) => {
-                            event.stopPropagation();
-                            toggleCustomerStatus(customer, event.target.checked);
-                          }}
-                        />
-                      </Stack>
-                    </TableCell>
-                    <TableCell onClick={(event) => event.stopPropagation()}>
-                      <Stack direction="row" spacing={0.5}>
-                        <Tooltip title="View details">
-                          <IconButton size="small" color="primary" onClick={() => navigate(`/customers/${customer.id}`)}>
-                            <span style={{ fontSize: '1.1rem' }}>&#128065;</span>
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Edit customer">
-                          <IconButton size="small" onClick={() => openEditCustomer(customer)}>
-                            <span style={{ fontSize: '1.1rem' }}>&#9998;</span>
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Delete customer">
-                          <IconButton size="small" color="error" onClick={() => confirmDeleteCustomer(customer)}>
-                            <span style={{ fontSize: '1.1rem' }}>&#128465;</span>
-                          </IconButton>
-                        </Tooltip>
-                      </Stack>
-                    </TableCell>
+          <>
+            <TableContainer className="dashboard-table">
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Customer Name</TableCell>
+                    <TableCell>Email</TableCell>
+                    <TableCell>Phone Number</TableCell>
+                    <TableCell>Customer Segment</TableCell>
+                    <TableCell>Total Purchases</TableCell>
+                    <TableCell>Total Spend</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell>Actions</TableCell>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
+                </TableHead>
+                <TableBody>
+                  {pagedCustomers.map((customer) => (
+                    <TableRow key={customer.id} hover onClick={() => setSelectedCustomer(customer)} sx={{ cursor: 'pointer' }}>
+                      <TableCell>
+                        <Typography variant="subtitle2">{customer.name}</Typography>
+                        <Typography variant="body2" color="text.secondary">{customer.city || '-'}</Typography>
+                      </TableCell>
+                      <TableCell>{customer.email}</TableCell>
+                      <TableCell>{customer.phone || '-'}</TableCell>
+                      <TableCell>
+                        <CustomerSegmentBadge segment={customer.segment} />
+                      </TableCell>
+                      <TableCell>{customer.purchaseCount ?? 0}</TableCell>
+                      <TableCell>{formatCurrency(customer.totalSpend)}</TableCell>
+                      <TableCell>
+                        <Stack direction="row" spacing={1} alignItems="center">
+                          <Typography variant="body2">{customer.status === 'active' ? 'Active' : 'Inactive'}</Typography>
+                          <Switch
+                            size="small"
+                            checked={customer.status === 'active'}
+                            onChange={(event) => {
+                              event.stopPropagation();
+                              toggleCustomerStatus(customer, event.target.checked);
+                            }}
+                          />
+                        </Stack>
+                      </TableCell>
+                      <TableCell onClick={(event) => event.stopPropagation()}>
+                        <Stack direction="row" spacing={0.5}>
+                          <Tooltip title="View details">
+                            <IconButton size="small" color="primary" onClick={() => navigate(`/customers/${customer.id}`)}>
+                              <span style={{ fontSize: '1.1rem' }}>&#128065;</span>
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Edit customer">
+                            <IconButton size="small" onClick={() => openEditCustomer(customer)}>
+                              <span style={{ fontSize: '1.1rem' }}>&#9998;</span>
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Delete customer">
+                            <IconButton size="small" color="error" onClick={() => confirmDeleteCustomer(customer)}>
+                              <span style={{ fontSize: '1.1rem' }}>&#128465;</span>
+                            </IconButton>
+                          </Tooltip>
+                        </Stack>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+            <TablePagination
+              component="div"
+              count={customers.length}
+              page={page}
+              rowsPerPage={rowsPerPage}
+              rowsPerPageOptions={[10, 25, 50, 100]}
+              onPageChange={(_event, nextPage) => setPage(nextPage)}
+              onRowsPerPageChange={(event) => {
+                setRowsPerPage(parseInt(event.target.value, 10));
+                setPage(0);
+              }}
+            />
+          </>
         )}
         {selectedCustomer ? (
           <Card sx={{ p: 2, mt: 2 }}>

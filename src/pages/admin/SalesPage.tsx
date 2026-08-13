@@ -11,17 +11,21 @@ import {
   TableCell,
   TableContainer,
   TableHead,
+  TablePagination,
   TableRow,
   TextField,
   Typography,
 } from '@mui/material';
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext.tsx';
 import ConfirmDeleteDialog from '../../components/admin/ConfirmDeleteDialog.tsx';
 import SaleDialog from '../../components/admin/SaleDialog.tsx';
 import AdminLayout from './AdminLayout.tsx';
-import { apiRequest, formatCurrency } from './adminShared.js';
+import ErrorBanner from '../../components/admin/ErrorBanner.tsx';
+import { apiRequest, formatCurrency, getDateRangeError, getErrorMessage, isDateRangeInvalid } from './adminShared.js';
+import { queryKeys, useApiQuery, useDebouncedValue, useTablePagination } from '../../lib/queryHooks';
 import {
   calculateSaleTotal,
   defaultSaleForm,
@@ -36,22 +40,11 @@ import {
 export default function SalesPage() {
   const { token } = useAuth();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const [errorMessage, setErrorMessage] = useState('');
-  const [transactionsLoading, setTransactionsLoading] = useState(false);
-  const [summaryLoading, setSummaryLoading] = useState(false);
-  const [salesSummary, setSalesSummary] = useState({
-    totalSales: 0,
-    totalRevenue: 0,
-    totalOrders: 0,
-    averageOrderValue: 0,
-  });
-  const [products, setProducts] = useState([]);
-  const [customers, setCustomers] = useState([]);
-  const [transactions, setTransactions] = useState([]);
-  const [categories, setCategories] = useState([]);
+  const [dateRangeError, setDateRangeError] = useState('');
 
-  // Search & filter state
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -62,6 +55,9 @@ export default function SalesPage() {
   const [sortBy, setSortBy] = useState('date');
   const [sortOrder, setSortOrder] = useState('desc');
 
+  const debouncedSearchQuery = useDebouncedValue(searchQuery);
+  const { page, setPage, rowsPerPage, setRowsPerPage } = useTablePagination(10);
+
   const [saleDialogOpen, setSaleDialogOpen] = useState(false);
   const [saleDeleteDialogOpen, setSaleDeleteDialogOpen] = useState(false);
   const [saleSubmitting, setSaleSubmitting] = useState(false);
@@ -71,12 +67,29 @@ export default function SalesPage() {
   const [editingTransactionId, setEditingTransactionId] = useState(null);
   const [selectedTransaction, setSelectedTransaction] = useState(null);
 
-  const buildQueryString = useCallback(() => {
+  const productsQuery = useApiQuery<Array<Record<string, any>>>(queryKeys.sales.products, '/sales/products/selectable', token);
+  const customersQuery = useApiQuery<Array<Record<string, any>>>(queryKeys.sales.customers, '/sales/customers/selectable', token);
+  const summaryQuery = useApiQuery<Record<string, any>>(queryKeys.dashboard.summary, '/dashboard/sales-summary', token);
+
+  const products = productsQuery.data ?? [];
+  const customers = customersQuery.data ?? [];
+  const salesSummary = summaryQuery.data ?? { totalSales: 0, totalRevenue: 0, totalOrders: 0, averageOrderValue: 0 };
+
+  const categories = useMemo(() => {
+    const seen = new Map<number, string>();
+    for (const product of products) {
+      if (product.categoryId && !seen.has(product.categoryId)) {
+        seen.set(product.categoryId, product.categoryName);
+      }
+    }
+    return [...seen.entries()].map(([id, name]) => ({ id, name }));
+  }, [products]);
+
+  const transactionParams = useMemo(() => {
     const params = new URLSearchParams();
-    if (searchQuery.trim()) params.set('q', searchQuery.trim());
+    if (debouncedSearchQuery.trim()) params.set('q', debouncedSearchQuery.trim());
     if (dateFrom) params.set('dateFrom', new Date(dateFrom).toISOString());
     if (dateTo) {
-      // include the full end day by moving to end-of-minute
       const d = new Date(dateTo);
       d.setSeconds(59);
       params.set('dateTo', d.toISOString());
@@ -88,83 +101,32 @@ export default function SalesPage() {
     params.set('sortBy', sortBy);
     params.set('sortOrder', sortOrder);
     return params.toString();
-  }, [searchQuery, dateFrom, dateTo, filterCategoryId, filterChannel, filterPaymentMethod, filterPaymentStatus, sortBy, sortOrder]);
+  }, [debouncedSearchQuery, dateFrom, dateTo, filterCategoryId, filterChannel, filterPaymentMethod, filterPaymentStatus, sortBy, sortOrder]);
 
-  const loadCategories = useCallback(async () => {
-    if (!token) return;
-    try {
-      const payload = await apiRequest('/sales/products/selectable', token);
-      // Derive unique categories from selectable products
-      const seen = new Map();
-      for (const p of payload) {
-        if (p.categoryId && !seen.has(p.categoryId)) {
-          seen.set(p.categoryId, p.categoryName);
-        }
-      }
-      setCategories([...seen.entries()].map(([id, name]) => ({ id, name })));
-    } catch {
-      // non-fatal
-    }
-  }, [token]);
-
-  const loadSalesSummary = useCallback(async () => {
-    if (!token) return;
-    setSummaryLoading(true);
-    try {
-      const payload = await apiRequest('/dashboard/sales-summary', token);
-      setSalesSummary(payload);
-    } catch {
-      // non-fatal
-    } finally {
-      setSummaryLoading(false);
-    }
-  }, [token]);
-
-  const loadProducts = useCallback(async () => {
-    if (!token) return;
-    try {
-      const payload = await apiRequest('/sales/products/selectable', token);
-      setProducts(payload);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to load products');
-    }
-  }, [token]);
-
-  const loadCustomers = useCallback(async () => {
-    if (!token) return;
-    try {
-      const payload = await apiRequest('/sales/customers/selectable', token);
-      setCustomers(payload);
-    } catch {
-      // non-fatal
-    }
-  }, [token]);
-
-  const loadTransactions = useCallback(async () => {
-    if (!token) return;
-    setTransactionsLoading(true);
-    try {
-      const qs = buildQueryString();
-      const payload = await apiRequest(`/sales?${qs}`, token);
-      setTransactions(payload);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to load sales transactions');
-    } finally {
-      setTransactionsLoading(false);
-    }
-  }, [token, buildQueryString]);
+  const transactionsQuery = useApiQuery<Array<Record<string, any>>>(
+    queryKeys.sales.list(transactionParams),
+    `/sales?${transactionParams}`,
+    token,
+    { enabled: !isDateRangeInvalid(dateFrom, dateTo) },
+  );
+  const transactions = transactionsQuery.data ?? [];
 
   useEffect(() => {
-    loadCategories();
-    loadProducts();
-    loadCustomers();
-    loadSalesSummary();
-  }, [loadCategories, loadProducts, loadCustomers, loadSalesSummary]);
+    setPage(0);
+  }, [transactionParams, setPage]);
 
-  // Re-fetch whenever any filter/sort changes
   useEffect(() => {
-    loadTransactions();
-  }, [loadTransactions]);
+    if (transactionsQuery.error) {
+      setErrorMessage(getErrorMessage(transactionsQuery.error, 'Failed to load sales transactions'));
+    }
+  }, [transactionsQuery.error]);
+
+  const invalidateSalesData = () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.sales.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.inventory.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.summary });
+    queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.notifications });
+  };
 
   const openAddSale = () => {
     setSaleForm(defaultSaleForm());
@@ -216,11 +178,9 @@ export default function SalesPage() {
       } else {
         setSaleSuccessMessage('Sale Created Successfully.');
       }
-      await loadTransactions();
-      await loadProducts();
-      await loadSalesSummary();
+      invalidateSalesData();
     } catch (error) {
-      setSaleFormError(error instanceof Error ? error.message : 'Unable to save sales transaction');
+      setSaleFormError(getErrorMessage(error, 'Unable to save sales transaction'));
     } finally {
       setSaleSubmitting(false);
     }
@@ -239,21 +199,21 @@ export default function SalesPage() {
       await apiRequest(`/sales/${selectedTransaction.transactionId}`, token, { method: 'DELETE' });
       setSaleDeleteDialogOpen(false);
       setSelectedTransaction(null);
-      await loadTransactions();
-      await loadProducts();
-      await loadSalesSummary();
+      invalidateSalesData();
     } catch (error) {
       setSaleDeleteDialogOpen(false);
       setSelectedTransaction(null);
-      setErrorMessage(error instanceof Error ? error.message : 'Unable to delete sales transaction');
+      setErrorMessage(getErrorMessage(error, 'Unable to delete sales transaction'));
     }
   };
 
+  const pagedTransactions = useMemo(() => {
+    return transactions.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
+  }, [transactions, page, rowsPerPage]);
+
   return (
     <AdminLayout>
-      {errorMessage ? (
-        <Alert severity="error" onClose={() => setErrorMessage('')}>{errorMessage}</Alert>
-      ) : null}
+      <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage('')} />
       {saleSuccessMessage ? (
         <Alert severity="success" onClose={() => setSaleSuccessMessage('')}>{saleSuccessMessage}</Alert>
       ) : null}
@@ -264,25 +224,25 @@ export default function SalesPage() {
           <Card className="dashboard-summary-card">
             <Typography className="dashboard-summary-card__label">Total Sales</Typography>
             <Typography className="dashboard-summary-card__value">
-              {summaryLoading ? <Skeleton width={110} /> : formatCurrency(salesSummary.totalSales)}
+              {summaryQuery.isLoading ? <Skeleton width={110} /> : formatCurrency(salesSummary.totalSales)}
             </Typography>
           </Card>
           <Card className="dashboard-summary-card">
             <Typography className="dashboard-summary-card__label">Total Revenue</Typography>
             <Typography className="dashboard-summary-card__value">
-              {summaryLoading ? <Skeleton width={110} /> : formatCurrency(salesSummary.totalRevenue)}
+              {summaryQuery.isLoading ? <Skeleton width={110} /> : formatCurrency(salesSummary.totalRevenue)}
             </Typography>
           </Card>
           <Card className="dashboard-summary-card">
             <Typography className="dashboard-summary-card__label">Total Orders</Typography>
             <Typography className="dashboard-summary-card__value">
-              {summaryLoading ? <Skeleton width={60} /> : salesSummary.totalOrders}
+              {summaryQuery.isLoading ? <Skeleton width={60} /> : salesSummary.totalOrders}
             </Typography>
           </Card>
           <Card className="dashboard-summary-card">
             <Typography className="dashboard-summary-card__label">Average Order Value</Typography>
             <Typography className="dashboard-summary-card__value">
-              {summaryLoading ? <Skeleton width={110} /> : formatCurrency(salesSummary.averageOrderValue)}
+              {summaryQuery.isLoading ? <Skeleton width={110} /> : formatCurrency(salesSummary.averageOrderValue)}
             </Typography>
           </Card>
         </Box>
@@ -313,7 +273,12 @@ export default function SalesPage() {
             type="datetime-local"
             size="small"
             value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
+            onChange={(e) => {
+              setDateFrom(e.target.value);
+              setDateRangeError(getDateRangeError(e.target.value, dateTo) ?? '');
+            }}
+            error={Boolean(dateRangeError)}
+            helperText={dateRangeError}
             InputLabelProps={{ shrink: true }}
             sx={{ minWidth: 180 }}
           />
@@ -322,7 +287,12 @@ export default function SalesPage() {
             type="datetime-local"
             size="small"
             value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
+            onChange={(e) => {
+              setDateTo(e.target.value);
+              setDateRangeError(getDateRangeError(dateFrom, e.target.value) ?? '');
+            }}
+            error={Boolean(dateRangeError)}
+            helperText={dateRangeError}
             InputLabelProps={{ shrink: true }}
             sx={{ minWidth: 180 }}
           />
@@ -415,6 +385,7 @@ export default function SalesPage() {
               setSearchQuery('');
               setDateFrom('');
               setDateTo('');
+              setDateRangeError('');
               setFilterCategoryId('');
               setFilterChannel('');
               setFilterPaymentMethod('');
@@ -425,7 +396,7 @@ export default function SalesPage() {
           >
             Clear
           </Button>
-          <Button variant="outlined" onClick={loadTransactions}>
+          <Button variant="outlined" onClick={() => { void transactionsQuery.refetch(); }}>
             Refresh
           </Button>
         </Box>
@@ -449,7 +420,7 @@ export default function SalesPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {transactionsLoading ? (
+              {transactionsQuery.isLoading ? (
                 Array.from({ length: 5 }).map((_, rowIndex) => (
                   <TableRow key={`skeleton-${rowIndex}`}>
                     {Array.from({ length: 12 }).map((__, colIndex) => (
@@ -471,7 +442,7 @@ export default function SalesPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                transactions.map((transaction) => {
+                pagedTransactions.map((transaction) => {
                   const firstLine = transaction.lines?.[0] ?? null;
                   const lineCount = transaction.lines?.length ?? 0;
                   return (
@@ -512,6 +483,20 @@ export default function SalesPage() {
             </TableBody>
           </Table>
         </TableContainer>
+        {transactions.length > 0 ? (
+          <TablePagination
+            component="div"
+            count={transactions.length}
+            page={page}
+            rowsPerPage={rowsPerPage}
+            rowsPerPageOptions={[10, 25, 50, 100]}
+            onPageChange={(_event, nextPage) => setPage(nextPage)}
+            onRowsPerPageChange={(event) => {
+              setRowsPerPage(parseInt(event.target.value, 10));
+              setPage(0);
+            }}
+          />
+        ) : null}
       </Card>
 
       <SaleDialog

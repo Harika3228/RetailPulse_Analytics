@@ -8,9 +8,9 @@ from fastapi.responses import Response
 
 from backend.auth_utils import get_company_for_user, get_current_user
 from backend.database import DbDependency
-from backend.helpers import _ensure_admin, _get_company_analytics_summary, _get_company_inventory_summary, _get_company_product_summary, _get_company_sales_summary, create_audit_log, list_company_notifications
+from backend.helpers import _ensure_admin, _get_company_analytics_summary, _get_company_inventory_summary, _get_company_product_summary, _get_company_sales_summary, _get_company_top_customers, _get_company_top_products, create_audit_log, list_company_notifications
 from backend.models import AuditLog, SalesTransaction, User
-from backend.schemas import AnalyticsDashboardResponse, AuditLogResponse, DashboardResponse, InventoryDashboardSummaryResponse, NotificationResponse, ProductSummaryResponse, SalesDashboardSummaryResponse
+from backend.schemas import AnalyticsDashboardResponse, AuditLogResponse, DashboardResponse, InventoryDashboardSummaryResponse, NotificationResponse, ProductSummaryResponse, SalesDashboardSummaryResponse, TopCustomerResponse, TopProductResponse
 
 
 def dashboard(db: DbDependency, authorization: str | None = None) -> DashboardResponse:
@@ -76,6 +76,7 @@ def dashboard_analytics_summary(
     brand: str | None = None,
     salesChannel: str | None = None,
     paymentMethod: str | None = None,
+    customer: str | None = None,
 ) -> AnalyticsDashboardResponse:
     if authorization is None or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing token")
@@ -90,7 +91,7 @@ def dashboard_analytics_summary(
         ip_address="Unknown",
         browser="Unknown",
     )
-    if any([dateFrom, dateTo, product, category, brand, salesChannel, paymentMethod]):
+    if any([dateFrom, dateTo, product, category, brand, salesChannel, paymentMethod, customer]):
         create_audit_log(
             db,
             company=str(user.companyId),
@@ -110,6 +111,65 @@ def dashboard_analytics_summary(
         brand=brand,
         sales_channel=salesChannel,
         payment_method=paymentMethod,
+        customer=customer,
+    )
+
+
+def dashboard_top_products(
+    db: DbDependency,
+    authorization: str | None = None,
+    dateFrom: str | None = None,
+    dateTo: str | None = None,
+    product: str | None = None,
+    category: str | None = None,
+    brand: str | None = None,
+    salesChannel: str | None = None,
+    paymentMethod: str | None = None,
+    customer: str | None = None,
+    limit: int | None = 50,
+) -> list[TopProductResponse]:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    token = authorization.split(" ", 1)[1]
+    user = get_current_user(db, token)
+    return _get_company_top_products(
+        db,
+        user.companyId,
+        date_from=dateFrom,
+        date_to=dateTo,
+        product=product,
+        category=category,
+        brand=brand,
+        sales_channel=salesChannel,
+        payment_method=paymentMethod,
+        customer=customer,
+        limit=limit,
+    )
+
+
+def dashboard_top_customers(
+    db: DbDependency,
+    authorization: str | None = None,
+    dateFrom: str | None = None,
+    dateTo: str | None = None,
+    salesChannel: str | None = None,
+    paymentMethod: str | None = None,
+    customer: str | None = None,
+    limit: int | None = 20,
+) -> list[TopCustomerResponse]:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    token = authorization.split(" ", 1)[1]
+    user = get_current_user(db, token)
+    return _get_company_top_customers(
+        db,
+        user.companyId,
+        date_from=dateFrom,
+        date_to=dateTo,
+        sales_channel=salesChannel,
+        payment_method=paymentMethod,
+        customer=customer,
+        limit=limit,
     )
 
 
@@ -124,6 +184,7 @@ def dashboard_export(
     brand: str | None = None,
     salesChannel: str | None = None,
     paymentMethod: str | None = None,
+    customer: str | None = None,
 ) -> Response:
     if authorization is None or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing token")
@@ -141,6 +202,7 @@ def dashboard_export(
         brand=brand,
         sales_channel=salesChannel,
         payment_method=paymentMethod,
+        customer=customer,
     )
     sales_summary = _get_company_sales_summary(db, user.companyId)
     inventory_summary = _get_company_inventory_summary(db, user.companyId)

@@ -1,9 +1,11 @@
-import { Alert, Box, Button, Card, Stack, Typography } from '@mui/material';
+import { Box, Button, Card, Stack, Typography } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext.tsx';
 import AdminLayout from './AdminLayout.tsx';
-import { apiRequest, formatCurrency, formatDate } from './adminShared.js';
+import ErrorBanner from '../../components/admin/ErrorBanner.tsx';
+import { formatCurrency, formatDate, getErrorMessage } from './adminShared.js';
+import { queryKeys, useApiQuery } from '../../lib/queryHooks';
 
 export default function ProductDetailsPage() {
   const { token } = useAuth();
@@ -11,29 +13,22 @@ export default function ProductDetailsPage() {
   const { productId } = useParams();
 
   const [errorMessage, setErrorMessage] = useState('');
-  const [categories, setCategories] = useState([]);
-  const [product, setProduct] = useState(null);
+
+  const categoriesQuery = useApiQuery<Array<{ id: number; name: string }>>(queryKeys.categories.list(''), '/categories', token);
+  const productQuery = useApiQuery<Record<string, any> | null>(
+    queryKeys.products.detail(productId ?? ''),
+    `/products/${productId}`,
+    token,
+    { enabled: Boolean(token && productId) },
+  );
+  const categories = categoriesQuery.data ?? [];
+  const product = productQuery.data;
 
   useEffect(() => {
-    const loadDetails = async () => {
-      if (!token || !productId) {
-        return;
-      }
-
-      try {
-        const [categoryPayload, productPayload] = await Promise.all([
-          apiRequest('/categories', token),
-          apiRequest(`/products/${productId}`, token),
-        ]);
-        setCategories(categoryPayload);
-        setProduct(productPayload);
-      } catch (error) {
-        setErrorMessage(error instanceof Error ? error.message : 'Unable to load product details');
-      }
-    };
-
-    loadDetails();
-  }, [token, productId]);
+    if (productQuery.error || categoriesQuery.error) {
+      setErrorMessage(getErrorMessage(productQuery.error ?? categoriesQuery.error, 'Unable to load product details'));
+    }
+  }, [productQuery.error, categoriesQuery.error]);
 
   const categoryName = useMemo(() => {
     if (!product) {
@@ -44,7 +39,7 @@ export default function ProductDetailsPage() {
 
   return (
     <AdminLayout>
-      {errorMessage ? <Alert severity="error">{errorMessage}</Alert> : null}
+      <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage('')} />
       <Card className="dashboard-content__table-card">
         <Box className="dashboard-content__header">
           <Typography className="dashboard-content__title dashboard-content__title--dark">Product Details</Typography>

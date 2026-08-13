@@ -292,6 +292,62 @@ class SalesApiTests(unittest.TestCase):
         self.assertEqual(created.json()["customerId"], customer_id)
         self.assertEqual(created.json()["customerName"], f"API Customer {suffix}")
 
+    def test_sales_list_filters_by_product_and_customer(self):
+        admin_token = self._login("admin@retailpulse.com")
+        analyst_token = self._login("analyst@retailpulse.com")
+
+        suffix = uuid.uuid4().hex[:6]
+        category_id = self._create_category(admin_token, f"Filter {suffix}")
+        product_a = self._create_product(admin_token, category_id, f"FA-{suffix}", stock=20)
+        product_b = self._create_product(admin_token, category_id, f"FB-{suffix}", stock=20)
+
+        self.client.post(
+            "/api/sales",
+            headers={"Authorization": f"Bearer {analyst_token}"},
+            json={
+                "customerName": f"Filter Buyer A {suffix}",
+                "lines": [{"productId": product_a, "quantity": 1}],
+                "salesChannel": "In-Store",
+                "paymentMethod": "Cash",
+            },
+        )
+        self.client.post(
+            "/api/sales",
+            headers={"Authorization": f"Bearer {analyst_token}"},
+            json={
+                "customerName": f"Filter Buyer B {suffix}",
+                "lines": [{"productId": product_b, "quantity": 2}],
+                "salesChannel": "Online",
+                "paymentMethod": "Card",
+            },
+        )
+
+        by_product = self.client.get(
+            "/api/sales",
+            headers={"Authorization": f"Bearer {analyst_token}"},
+            params={"product": f"Product FA-{suffix}"},
+        )
+        self.assertEqual(by_product.status_code, 200)
+        self.assertEqual(len(by_product.json()), 1)
+        self.assertEqual(by_product.json()[0]["customerName"], f"Filter Buyer A {suffix}")
+
+        by_customer = self.client.get(
+            "/api/sales",
+            headers={"Authorization": f"Bearer {analyst_token}"},
+            params={"customer": f"Filter Buyer B {suffix}"},
+        )
+        self.assertEqual(by_customer.status_code, 200)
+        self.assertEqual(len(by_customer.json()), 1)
+        self.assertEqual(by_customer.json()[0]["lines"][0]["productName"], f"Product FB-{suffix}")
+
+        combined = self.client.get(
+            "/api/sales",
+            headers={"Authorization": f"Bearer {analyst_token}"},
+            params={"product": f"Product FA-{suffix}", "customer": f"Filter Buyer B {suffix}"},
+        )
+        self.assertEqual(combined.status_code, 200)
+        self.assertEqual(len(combined.json()), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

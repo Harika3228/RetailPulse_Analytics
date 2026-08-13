@@ -1,5 +1,4 @@
 import {
-  Alert,
   Box,
   Button,
   Card,
@@ -11,14 +10,19 @@ import {
   TableCell,
   TableContainer,
   TableHead,
+  TablePagination,
   TableRow,
   TextField,
   Typography,
 } from '@mui/material';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext.tsx';
+import { EmptyState } from '../../components/admin/EmptyStates.tsx';
 import AdminLayout from './AdminLayout.tsx';
-import { apiRequest } from './adminShared.js';
+import ErrorBanner from '../../components/admin/ErrorBanner.tsx';
+import { apiRequest, getErrorMessage } from './adminShared.js';
+import { queryKeys, useApiQuery, useDebouncedValue, useTablePagination } from '../../lib/queryHooks';
 
 function stockStatusLabel(status: string) {
   switch (status) {
@@ -44,9 +48,8 @@ function stockStatusColor(status: string) {
 
 export default function InventoryPage() {
   const { token } = useAuth();
+  const queryClient = useQueryClient();
   const [errorMessage, setErrorMessage] = useState('');
-  const [categories, setCategories] = useState<Array<{ id: number; name: string }>>([]);
-  const [inventory, setInventory] = useState<Array<Record<string, any>>>([]);
   const [inventoryQuery, setInventoryQuery] = useState('');
   const [inventoryCategoryFilter, setInventoryCategoryFilter] = useState('all');
   const [inventoryBrandFilter, setInventoryBrandFilter] = useState('all');
@@ -56,8 +59,6 @@ export default function InventoryPage() {
   const [inventorySortBy, setInventorySortBy] = useState('product_name');
   const [inventorySortDirection, setInventorySortDirection] = useState('asc');
   const [selectedInventoryItem, setSelectedInventoryItem] = useState<Record<string, any> | null>(null);
-  const [movements, setMovements] = useState<Array<Record<string, any>>>([]);
-  const [movementsLoading, setMovementsLoading] = useState(false);
   const [adjustmentForm, setAdjustmentForm] = useState({
     adjustmentType: 'stock_in',
     quantity: '1',
@@ -65,8 +66,52 @@ export default function InventoryPage() {
     remarks: '',
   });
   const [adjustmentSubmitting, setAdjustmentSubmitting] = useState(false);
-  const [adjustmentHistory, setAdjustmentHistory] = useState<Array<Record<string, any>>>([]);
-  const [adjustmentHistoryLoading, setAdjustmentHistoryLoading] = useState(false);
+
+  const debouncedInventoryQuery = useDebouncedValue(inventoryQuery);
+  const debouncedProductFilter = useDebouncedValue(inventoryProductFilter);
+  const { page, setPage, rowsPerPage, setRowsPerPage } = useTablePagination(10);
+
+  const categoriesQuery = useApiQuery<Array<{ id: number; name: string }>>(queryKeys.categories.list(''), '/categories', token);
+  const categories = categoriesQuery.data ?? [];
+
+  const inventoryParams = useMemo(() => {
+    const params = new URLSearchParams();
+    if (debouncedInventoryQuery.trim()) {
+      params.set('q', debouncedInventoryQuery.trim());
+    }
+    if (inventoryCategoryFilter !== 'all') {
+      params.set('categoryId', inventoryCategoryFilter);
+    }
+    if (inventoryBrandFilter !== 'all') {
+      params.set('brand', inventoryBrandFilter);
+    }
+    if (inventoryStatusFilter !== 'all') {
+      params.set('status_filter', inventoryStatusFilter);
+    }
+    if (debouncedProductFilter.trim()) {
+      params.set('product', debouncedProductFilter.trim());
+    }
+    if (inventoryForecastPeriod) {
+      params.set('forecast_period', inventoryForecastPeriod);
+    }
+    params.set('sort_by', inventorySortBy);
+    params.set('sort_direction', inventorySortDirection);
+    return params.toString();
+  }, [debouncedInventoryQuery, inventoryCategoryFilter, inventoryBrandFilter, inventoryStatusFilter, debouncedProductFilter, inventoryForecastPeriod, inventorySortBy, inventorySortDirection]);
+
+  const inventoryQueryResult = useApiQuery<Array<Record<string, any>>>(queryKeys.inventory.list(inventoryParams), `/inventory?${inventoryParams}`, token);
+  const inventory = inventoryQueryResult.data ?? [];
+
+  useEffect(() => {
+    setPage(0);
+    setSelectedInventoryItem(null);
+  }, [inventoryParams, setPage]);
+
+  useEffect(() => {
+    if (inventoryQueryResult.error || categoriesQuery.error) {
+      setErrorMessage(getErrorMessage(inventoryQueryResult.error ?? categoriesQuery.error, 'Failed to load inventory'));
+    }
+  }, [inventoryQueryResult.error, categoriesQuery.error]);
 
   const categoryById = useMemo(() => {
     const map = new Map<number, string>();
@@ -129,81 +174,29 @@ export default function InventoryPage() {
     ];
   }, [inventory]);
 
-  const loadCategories = useCallback(async () => {
-    if (!token) {
-      return;
-    }
-    try {
-      const payload = await apiRequest('/categories', token);
-      setCategories(payload);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to load categories');
-    }
-  }, [token]);
+  const selectedProductId = selectedInventoryItem?.productId ?? null;
+  const movementsQuery = useApiQuery<Array<Record<string, any>>>(
+    queryKeys.inventory.movements(selectedProductId ?? ''),
+    `/inventory/${selectedProductId}/movements`,
+    token,
+    { enabled: Boolean(selectedProductId) },
+  );
+  const adjustmentsQuery = useApiQuery<Array<Record<string, any>>>(
+    queryKeys.inventory.adjustments(selectedProductId ?? ''),
+    `/inventory/${selectedProductId}/adjustments`,
+    token,
+    { enabled: Boolean(selectedProductId) },
+  );
 
-  const loadInventory = useCallback(async () => {
-    if (!token) {
-      return;
-    }
-    const params = new URLSearchParams();
-    if (inventoryQuery.trim()) {
-      params.set('q', inventoryQuery.trim());
-    }
-    if (inventoryCategoryFilter !== 'all') {
-      params.set('categoryId', inventoryCategoryFilter);
-    }
-    if (inventoryBrandFilter !== 'all') {
-      params.set('brand', inventoryBrandFilter);
-    }
-    if (inventoryStatusFilter !== 'all') {
-      params.set('status_filter', inventoryStatusFilter);
-    }
-    if (inventoryProductFilter.trim()) {
-      params.set('product', inventoryProductFilter.trim());
-    }
-    if (inventoryForecastPeriod) {
-      params.set('forecast_period', inventoryForecastPeriod);
-    }
-    params.set('sort_by', inventorySortBy);
-    params.set('sort_direction', inventorySortDirection);
+  const movements = movementsQuery.data ?? [];
+  const adjustmentHistory = adjustmentsQuery.data ?? [];
 
-    try {
-      const payload = await apiRequest(`/inventory?${params.toString()}`, token);
-      setInventory(payload);
-      setSelectedInventoryItem(null);
-      setMovements([]);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to load inventory');
-    }
-  }, [inventoryBrandFilter, inventoryCategoryFilter, inventoryForecastPeriod, inventoryProductFilter, inventoryQuery, inventorySortBy, inventorySortDirection, inventoryStatusFilter, token]);
+  const invalidateInventory = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.inventory.all });
+  }, [queryClient]);
 
-  useEffect(() => {
-    loadCategories();
-    loadInventory();
-  }, [loadCategories, loadInventory]);
-
-  const openMovementHistory = async (item: Record<string, any>) => {
-    if (!token) {
-      return;
-    }
+  const openMovementHistory = (item: Record<string, any>) => {
     setSelectedInventoryItem(item);
-    setMovementsLoading(true);
-    setAdjustmentHistoryLoading(true);
-    try {
-      const [movementPayload, adjustmentPayload] = await Promise.all([
-        apiRequest(`/inventory/${item.productId}/movements`, token),
-        apiRequest(`/inventory/${item.productId}/adjustments`, token),
-      ]);
-      setMovements(movementPayload);
-      setAdjustmentHistory(adjustmentPayload);
-    } catch (error) {
-      setMovements([]);
-      setAdjustmentHistory([]);
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to load movements');
-    } finally {
-      setMovementsLoading(false);
-      setAdjustmentHistoryLoading(false);
-    }
   };
 
   const handleAdjustmentSubmit = async (event) => {
@@ -245,17 +238,23 @@ export default function InventoryPage() {
         reason: '',
         remarks: '',
       });
-      await openMovementHistory(selectedInventoryItem);
+      queryClient.invalidateQueries({ queryKey: queryKeys.inventory.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.inventory.movements(selectedInventoryItem.productId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.inventory.adjustments(selectedInventoryItem.productId) });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to create adjustment');
+      setErrorMessage(getErrorMessage(error, 'Failed to create adjustment'));
     } finally {
       setAdjustmentSubmitting(false);
     }
   };
 
+  const pagedInventory = useMemo(() => {
+    return inventory.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
+  }, [inventory, page, rowsPerPage]);
+
   return (
     <AdminLayout>
-      {errorMessage ? <Alert severity="error">{errorMessage}</Alert> : null}
+      <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage('')} />
       <Card className="dashboard-content__table-card">
         <Box className="dashboard-content__header">
           <Box>
@@ -420,7 +419,7 @@ export default function InventoryPage() {
             <MenuItem value="asc">Direction: Asc</MenuItem>
             <MenuItem value="desc">Direction: Desc</MenuItem>
           </TextField>
-          <Button variant="outlined" onClick={loadInventory}>
+          <Button variant="outlined" onClick={() => { void inventoryQueryResult.refetch(); }}>
             Apply
           </Button>
         </Box>
@@ -444,33 +443,69 @@ export default function InventoryPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {inventory.map((item) => (
-                <TableRow key={item.productId}>
-                  <TableCell>{item.productName}</TableCell>
-                  <TableCell>{item.sku}</TableCell>
-                  <TableCell>{item.categoryName || categoryById.get(item.categoryId) || '-'}</TableCell>
-                  <TableCell>{item.brand}</TableCell>
-                  <TableCell>{item.currentStock}</TableCell>
-                  <TableCell>{item.reservedStock}</TableCell>
-                  <TableCell>{item.availableStock}</TableCell>
-                  <TableCell>{item.reorderLevel}</TableCell>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontWeight: 600 }}>{item.recommendation || 'Stock Level Healthy'}</Typography>
-                  </TableCell>
-                  <TableCell>{item.predictedDemand ?? 0}</TableCell>
-                  <TableCell>
-                    <Chip label={stockStatusLabel(item.stockStatus)} color={stockStatusColor(item.stockStatus)} size="small" />
-                  </TableCell>
-                  <TableCell>
-                    <Button size="small" onClick={() => openMovementHistory(item)}>
-                      View Movements
-                    </Button>
+              {inventoryQueryResult.isLoading ? (
+                Array.from({ length: 5 }).map((_, rowIndex) => (
+                  <TableRow key={`skeleton-${rowIndex}`}>
+                    {Array.from({ length: 12 }).map((__, colIndex) => (
+                      <TableCell key={`skeleton-${rowIndex}-${colIndex}`}>
+                        <Typography variant="body2" color="text.secondary">…</Typography>
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : pagedInventory.length ? (
+                pagedInventory.map((item) => (
+                  <TableRow key={item.productId}>
+                    <TableCell>{item.productName}</TableCell>
+                    <TableCell>{item.sku}</TableCell>
+                    <TableCell>{item.categoryName || categoryById.get(item.categoryId) || '-'}</TableCell>
+                    <TableCell>{item.brand}</TableCell>
+                    <TableCell>{item.currentStock}</TableCell>
+                    <TableCell>{item.reservedStock}</TableCell>
+                    <TableCell>{item.availableStock}</TableCell>
+                    <TableCell>{item.reorderLevel}</TableCell>
+                    <TableCell>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>{item.recommendation || 'Stock Level Healthy'}</Typography>
+                    </TableCell>
+                    <TableCell>{item.predictedDemand ?? 0}</TableCell>
+                    <TableCell>
+                      <Chip label={stockStatusLabel(item.stockStatus)} color={stockStatusColor(item.stockStatus)} size="small" />
+                    </TableCell>
+                    <TableCell>
+                      <Button size="small" onClick={() => openMovementHistory(item)}>
+                        View Movements
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={12} sx={{ p: 0 }}>
+                    <EmptyState
+                      compact
+                      title="No inventory data"
+                      message="No products match the current search or filters."
+                    />
                   </TableCell>
                 </TableRow>
-              ))}
+              )}
             </TableBody>
           </Table>
         </TableContainer>
+        {inventory.length > 0 ? (
+          <TablePagination
+            component="div"
+            count={inventory.length}
+            page={page}
+            rowsPerPage={rowsPerPage}
+            rowsPerPageOptions={[10, 25, 50, 100]}
+            onPageChange={(_event, nextPage) => setPage(nextPage)}
+            onRowsPerPageChange={(event) => {
+              setRowsPerPage(parseInt(event.target.value, 10));
+              setPage(0);
+            }}
+          />
+        ) : null}
         <Typography className="dashboard-footnote">
           Inventory status is derived from current stock, reserved stock, and the configured reorder level.
         </Typography>
@@ -537,9 +572,9 @@ export default function InventoryPage() {
           </Box>
 
           <Typography variant="h6" sx={{ mb: 1 }}>Adjustment History</Typography>
-          {adjustmentHistoryLoading ? (
+          {adjustmentsQuery.isFetching ? (
             <Typography color="text.secondary">Loading adjustment history...</Typography>
-          ) : (
+          ) : adjustmentHistory.length ? (
             <Stack spacing={1} sx={{ mb: 3 }}>
               {adjustmentHistory.map((adjustment) => (
                 <Box key={adjustment.id} sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 1.5 }}>
@@ -553,12 +588,16 @@ export default function InventoryPage() {
                 </Box>
               ))}
             </Stack>
+          ) : (
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+              No stock adjustments have been recorded for this product yet.
+            </Typography>
           )}
 
           <Typography variant="h6" sx={{ mb: 1 }}>Movement History</Typography>
-          {movementsLoading ? (
+          {movementsQuery.isFetching ? (
             <Typography color="text.secondary">Loading movement history...</Typography>
-          ) : (
+          ) : movements.length ? (
             <Stack spacing={1}>
               {movements.map((movement) => (
                 <Box key={movement.id} sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: 1.5 }}>
@@ -572,6 +611,10 @@ export default function InventoryPage() {
                 </Box>
               ))}
             </Stack>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              No stock movements have been recorded for this product yet.
+            </Typography>
           )}
         </Card>
       ) : null}
