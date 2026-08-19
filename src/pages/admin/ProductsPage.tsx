@@ -36,6 +36,7 @@ const defaultProductForm = {
   unitPrice: '',
   costPrice: '',
   stockQuantity: '',
+  maxStockLevel: null as string | null,
   unitOfMeasure: 'Pieces',
   status: 'active',
 };
@@ -151,6 +152,7 @@ export default function ProductsPage() {
       unitPrice: String(product.unitPrice),
       costPrice: String(product.costPrice),
       stockQuantity: String(product.stockQuantity ?? product.initialStockQuantity ?? 0),
+      maxStockLevel: product.maxStockLevel != null ? String(product.maxStockLevel) : null,
       unitOfMeasure: product.unitOfMeasure,
       status: product.status === 'inactive' ? 'inactive' : 'active',
     });
@@ -213,6 +215,7 @@ export default function ProductsPage() {
       unitPrice: Number(productForm.unitPrice),
       costPrice: Number(productForm.costPrice),
       stockQuantity: Number(productForm.stockQuantity),
+      maxStockLevel: productForm.maxStockLevel ? Number(productForm.maxStockLevel) : null,
       unitOfMeasure: productForm.unitOfMeasure.trim(),
       status: productForm.status,
     };

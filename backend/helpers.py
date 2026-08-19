@@ -86,6 +86,95 @@ def create_notification(db, company_id: int, product_id: int | None = None, prod
     )
 
 
+# ---------------------------------------------------------------------------
+# Batch helpers (reduce per-product DB round-trips)
+# ---------------------------------------------------------------------------
+
+class AuditLogCollector:
+    """Collects audit log entries and flushes them in a single commit."""
+
+    def __init__(self, db) -> None:
+        self._db = db
+        self._entries: list[AuditLog] = []
+        self._seen_actions: set[str] = set()
+
+    def add(
+        self,
+        company: str,
+        user: str,
+        action: str,
+        entity_name: str | None = None,
+        invoice_number: str | None = None,
+        product_name: str | None = None,
+        category_name: str | None = None,
+        forecast_period: str | None = None,
+        ip_address: str | None = None,
+        browser: str | None = None,
+        deduplicate_key: str | None = None,
+    ) -> None:
+        key = deduplicate_key or f"{action}:{entity_name}:{product_name}"
+        if key in self._seen_actions:
+            return
+        self._seen_actions.add(key)
+        self._entries.append(
+            AuditLog(
+                company=company,
+                entityName=entity_name,
+                invoiceNumber=invoice_number,
+                productName=product_name,
+                categoryName=category_name,
+                forecastPeriod=forecast_period,
+                user=user,
+                action=action,
+                ipAddress=ip_address or "Unknown",
+                browser=browser or "Unknown",
+                timestamp=datetime.now(timezone.utc),
+            )
+        )
+
+    def flush(self) -> None:
+        if self._entries:
+            self._db.add_all(self._entries)
+            self._entries.clear()
+
+
+class NotificationCollector:
+    """Collects notifications and writes them in bulk, de-duplicating messages."""
+
+    def __init__(self, db) -> None:
+        self._db = db
+        self._entries: list[Notification] = []
+        self._seen_messages: set[str] = set()
+
+    def add(
+        self,
+        company_id: int,
+        product_id: int | None = None,
+        product_name: str | None = None,
+        message: str = "",
+        notification_type: str = "info",
+    ) -> None:
+        dedup_key = f"{company_id}:{message}:{notification_type}"
+        if dedup_key in self._seen_messages:
+            return
+        self._seen_messages.add(dedup_key)
+        self._entries.append(
+            Notification(
+                companyId=company_id,
+                productId=product_id or 0,
+                productName=product_name or "",
+                message=message,
+                type=notification_type,
+                isRead=0,
+            )
+        )
+
+    def flush(self) -> None:
+        if self._entries:
+            self._db.add_all(self._entries)
+            self._entries.clear()
+
+
 def list_company_notifications(db, company_id: int, limit: int = 20) -> list[NotificationResponse]:
     items = (
         db.query(Notification)
@@ -224,6 +313,7 @@ def _to_product_response(product) -> ProductResponse:
         costPrice=float(product.costPrice or 0),
         stockQuantity=stock_quantity,
         initialStockQuantity=stock_quantity,
+        maxStockLevel=product.maxStockLevel if hasattr(product, 'maxStockLevel') else None,
         unitOfMeasure=product.unitOfMeasure or "",
         status=product.status or "active",
         createdAt=product.createdAt.isoformat() if product.createdAt else None,

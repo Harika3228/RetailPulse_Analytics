@@ -70,6 +70,10 @@ export const queryKeys = {
   inventory: {
     all: ['inventory'] as const,
     list: (params: string) => ['inventory', 'list', params] as const,
+    forecast: (params: string) => ['inventory', 'forecast', params] as const,
+    recommendations: (params: string) => ['inventory', 'recommendations', params] as const,
+    productRecommendation: (id: number | string, period?: string) => ['inventory', 'recommendation', String(id), period ?? ''] as const,
+    forecastSeries: (id: number | string, period?: string) => ['inventory', 'forecastSeries', String(id), period ?? ''] as const,
     movements: (productId: number | string) => ['inventory', String(productId), 'movements'] as const,
     adjustments: (productId: number | string) => ['inventory', String(productId), 'adjustments'] as const,
   },
@@ -94,6 +98,7 @@ export const queryKeys = {
     products: (period: string) => ['forecasting', 'products', period] as const,
     categories: (period: string) => ['forecasting', 'categories', period] as const,
     accuracy: ['forecasting', 'accuracy'] as const,
+    demand: (period: string) => ['forecasting', 'demand', period] as const,
   },
   auditLogs: {
     all: ['audit-logs'] as const,

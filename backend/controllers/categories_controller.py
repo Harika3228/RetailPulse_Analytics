@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 
 from backend.auth_utils import get_company_for_user, get_current_user
+from backend.cache import invalidate_forecast_cache
 from backend.database import DbDependency
 from backend.helpers import _ensure_admin, create_audit_log
 from backend.models import Category, Product
@@ -53,6 +54,7 @@ def create_category(payload: CategoryRequest, db: DbDependency, authorization: s
     db.add(cat)
     db.commit()
     db.refresh(cat)
+    invalidate_forecast_cache(user.companyId)
     create_audit_log(db, company=company.name, user=user.email, action="Category Created",
                      entity_name=cat.name, ip_address="Unknown", browser="Unknown")
     return CategoryResponse(id=cat.id, name=cat.name, description=cat.description,
@@ -102,6 +104,7 @@ def update_category(category_id: int, payload: CategoryRequest, db: DbDependency
     cat.updatedAt = datetime.now(timezone.utc)
     db.commit()
     db.refresh(cat)
+    invalidate_forecast_cache(user.companyId)
 
     count = db.query(Product).filter(Product.companyId == user.companyId, Product.categoryId == cat.id).count()
     create_audit_log(db, company=company.name, user=user.email, action="Category Updated",
@@ -128,6 +131,7 @@ def delete_category(category_id: int, db: DbDependency, authorization: str | Non
 
     db.delete(cat)
     db.commit()
+    invalidate_forecast_cache(user.companyId)
     create_audit_log(db, company=company.name, user=user.email, action="Category Deleted",
                      entity_name=cat.name, ip_address="Unknown", browser="Unknown")
     return {"message": "Category deleted"}

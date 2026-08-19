@@ -46,6 +46,40 @@ function stockStatusColor(status: string) {
   }
 }
 
+function riskClassificationLabel(risk: string) {
+  switch (risk) {
+    case 'out_of_stock':
+      return 'Out of Stock';
+    case 'stockout_risk':
+      return 'Stockout Risk';
+    case 'low_stock':
+      return 'Low Stock';
+    case 'healthy':
+      return 'Healthy';
+    case 'overstock':
+      return 'Overstock';
+    default:
+      return risk;
+  }
+}
+
+function riskClassificationColor(risk: string): 'error' | 'warning' | 'info' | 'success' | 'default' {
+  switch (risk) {
+    case 'out_of_stock':
+      return 'error';
+    case 'stockout_risk':
+      return 'warning';
+    case 'low_stock':
+      return 'info';
+    case 'healthy':
+      return 'success';
+    case 'overstock':
+      return 'default';
+    default:
+      return 'default';
+  }
+}
+
 export default function InventoryPage() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
@@ -99,7 +133,7 @@ export default function InventoryPage() {
     return params.toString();
   }, [debouncedInventoryQuery, inventoryCategoryFilter, inventoryBrandFilter, inventoryStatusFilter, debouncedProductFilter, inventoryForecastPeriod, inventorySortBy, inventorySortDirection]);
 
-  const inventoryQueryResult = useApiQuery<Array<Record<string, any>>>(queryKeys.inventory.list(inventoryParams), `/inventory?${inventoryParams}`, token);
+  const inventoryQueryResult = useApiQuery<Array<Record<string, any>>>(queryKeys.inventory.list(inventoryParams), `/inventory?${inventoryParams}`, token, { staleTime: 5 * 60 * 1000 });
   const inventory = inventoryQueryResult.data ?? [];
 
   useEffect(() => {
@@ -375,6 +409,8 @@ export default function InventoryPage() {
             <MenuItem value="in_stock">In Stock</MenuItem>
             <MenuItem value="low_stock">Low Stock</MenuItem>
             <MenuItem value="out_of_stock">Out of Stock</MenuItem>
+            <MenuItem value="stockout_risk">Stockout Risk</MenuItem>
+            <MenuItem value="overstock">Overstock</MenuItem>
           </TextField>
           <TextField
             value={inventoryProductFilter}
@@ -436,6 +472,7 @@ export default function InventoryPage() {
                 <TableCell>Reserved</TableCell>
                 <TableCell>Available</TableCell>
                 <TableCell>Reorder Level</TableCell>
+                <TableCell>Risk Classification</TableCell>
                 <TableCell>Recommendation</TableCell>
                 <TableCell>Predicted Demand</TableCell>
                 <TableCell>Status</TableCell>
@@ -446,7 +483,7 @@ export default function InventoryPage() {
               {inventoryQueryResult.isLoading ? (
                 Array.from({ length: 5 }).map((_, rowIndex) => (
                   <TableRow key={`skeleton-${rowIndex}`}>
-                    {Array.from({ length: 12 }).map((__, colIndex) => (
+                    {Array.from({ length: 13 }).map((__, colIndex) => (
                       <TableCell key={`skeleton-${rowIndex}-${colIndex}`}>
                         <Typography variant="body2" color="text.secondary">…</Typography>
                       </TableCell>
@@ -465,6 +502,9 @@ export default function InventoryPage() {
                     <TableCell>{item.availableStock}</TableCell>
                     <TableCell>{item.reorderLevel}</TableCell>
                     <TableCell>
+                      <Chip label={riskClassificationLabel(item.riskClassification)} color={riskClassificationColor(item.riskClassification)} size="small" />
+                    </TableCell>
+                    <TableCell>
                       <Typography variant="body2" sx={{ fontWeight: 600 }}>{item.recommendation || 'Stock Level Healthy'}</Typography>
                     </TableCell>
                     <TableCell>{item.predictedDemand ?? 0}</TableCell>
@@ -480,7 +520,7 @@ export default function InventoryPage() {
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={12} sx={{ p: 0 }}>
+                  <TableCell colSpan={13} sx={{ p: 0 }}>
                     <EmptyState
                       compact
                       title="No inventory data"

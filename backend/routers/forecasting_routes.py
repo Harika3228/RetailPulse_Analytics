@@ -4,6 +4,7 @@ from backend.controllers.forecasting_controller import (
     export_category_forecast_report,
     export_demand_forecast_report,
     export_product_forecast_report,
+    get_demand_forecast_detail,
     get_forecast_accuracy,
     get_forecast_categories,
     get_forecast_products,
@@ -11,6 +12,7 @@ from backend.controllers.forecasting_controller import (
 )
 from backend.database import DbDependency
 from backend.schemas import (
+    DemandForecastDetailResponse,
     ForecastAccuracyResponse,
     ForecastCategoryResponse,
     ForecastProductResponse,
@@ -83,3 +85,13 @@ def export_category_forecast_report_route(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ):
     return export_category_forecast_report(db, authorization)
+
+
+@router.get("/forecasting/demand", response_model=list[DemandForecastDetailResponse])
+def get_demand_forecast_detail_route(
+    db: DbDependency,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    period: str | None = Query(default=None),
+    product_id: int | None = Query(default=None),
+):
+    return get_demand_forecast_detail(db, authorization, period, product_id)

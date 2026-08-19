@@ -2,7 +2,7 @@ import { Box, Button, Card, MenuItem, Select, Stack, TextField, Typography } fro
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../auth/AuthContext.tsx';
 import { EmptyState } from '../../components/admin/EmptyStates.tsx';
-import { ChartSkeleton, KpiValueSkeleton, PanelListSkeleton } from '../../components/admin/LoadingStates.tsx';
+import { ChartSkeleton, DemandAnalysisTableSkeleton, KpiValueSkeleton, PanelListSkeleton } from '../../components/admin/LoadingStates.tsx';
 import AdminLayout from './AdminLayout.tsx';
 import ErrorBanner from '../../components/admin/ErrorBanner.tsx';
 import { formatCurrency, getApiBase, getErrorMessage } from './adminShared';
@@ -17,25 +17,28 @@ export default function ForecastingPage() {
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [exporting, setExporting] = useState<'demand' | 'products' | 'categories' | null>(null);
 
-  const summaryQuery = useApiQuery<Record<string, any> | null>(queryKeys.forecasting.summary(period), `/forecasting?period=${period}`, token);
-  const productsQuery = useApiQuery<Array<Record<string, any>>>(queryKeys.forecasting.products(period), `/forecasting/products?period=${period}`, token);
-  const categoriesQuery = useApiQuery<Array<Record<string, any>>>(queryKeys.forecasting.categories(period), `/forecasting/categories?period=${period}`, token);
-  const accuracyQuery = useApiQuery<Record<string, any> | null>(queryKeys.forecasting.accuracy, '/forecasting/accuracy', token);
+  const summaryQuery = useApiQuery<Record<string, any> | null>(queryKeys.forecasting.summary(period), `/forecasting?period=${period}`, token, { staleTime: 5 * 60 * 1000 });
+  const productsQuery = useApiQuery<Array<Record<string, any>>>(queryKeys.forecasting.products(period), `/forecasting/products?period=${period}`, token, { staleTime: 5 * 60 * 1000 });
+  const categoriesQuery = useApiQuery<Array<Record<string, any>>>(queryKeys.forecasting.categories(period), `/forecasting/categories?period=${period}`, token, { staleTime: 5 * 60 * 1000 });
+  const accuracyQuery = useApiQuery<Record<string, any> | null>(queryKeys.forecasting.accuracy, '/forecasting/accuracy', token, { staleTime: 5 * 60 * 1000 });
+  const demandQuery = useApiQuery<Array<Record<string, any>>>(queryKeys.forecasting.demand(period), `/forecasting/demand?period=${period}`, token, { staleTime: 5 * 60 * 1000 });
 
   const summary = summaryQuery.data ?? null;
   const products = productsQuery.data ?? [];
   const categories = categoriesQuery.data ?? [];
   const accuracy = accuracyQuery.data ?? null;
+  const demandDetail = demandQuery.data ?? [];
   const summaryLoading = summaryQuery.isLoading;
   const productsLoading = productsQuery.isLoading;
   const categoriesLoading = categoriesQuery.isLoading;
+  const demandLoading = demandQuery.isLoading;
 
   useEffect(() => {
-    const error = summaryQuery.error ?? productsQuery.error ?? categoriesQuery.error ?? accuracyQuery.error;
+    const error = summaryQuery.error ?? productsQuery.error ?? categoriesQuery.error ?? accuracyQuery.error ?? demandQuery.error;
     if (error) {
       setErrorMessage(getErrorMessage(error, 'Unable to load forecast data'));
     }
-  }, [summaryQuery.error, productsQuery.error, categoriesQuery.error, accuracyQuery.error]);
+  }, [summaryQuery.error, productsQuery.error, categoriesQuery.error, accuracyQuery.error, demandQuery.error]);
 
   const kpis = useMemo(() => [
     { label: 'Total Predicted Demand', value: formatCurrency(summary?.forecastedDemand ?? 0) },
@@ -222,6 +225,61 @@ export default function ForecastingPage() {
               title="No forecast data"
               message="No sales history is available for the selected period, so a forecast could not be generated."
             />
+          )}
+        </Card>
+
+        <Card sx={{ p: 2 }}>
+          <Typography variant="h6">Demand Analysis — Moving Average vs Weighted MA vs Avg Daily Demand</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            Three forecasting methods are compared per product. The system selects the best estimate and generates an inventory recommendation.
+          </Typography>
+          {demandLoading ? (
+            <DemandAnalysisTableSkeleton rows={6} />
+          ) : filteredProducts.length ? (
+            <Box sx={{ mt: 2, overflowX: 'auto' }}>
+              <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                <Box component="thead">
+                  <Box component="tr" sx={{ borderBottom: '2px solid #e5e7eb' }}>
+                    {['Product', 'Moving Avg', 'Weighted MA', 'Avg Daily', 'Forecast', 'Stock', 'Days Left', 'Risk', 'Recommendation'].map((h) => (
+                      <Box key={h} component="th" sx={{ textAlign: 'left', py: 1, px: 1, fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</Box>
+                    ))}
+                  </Box>
+                </Box>
+                <Box component="tbody">
+                  {(demandQuery.data ?? []).filter((item) => {
+                    const search = productSearch.trim().toLowerCase();
+                    const matchesSearch = !search || (item.productName ?? '').toLowerCase().includes(search);
+                    const matchesCategory = selectedCategory === 'all' || (item.categoryName ?? 'Uncategorized') === selectedCategory;
+                    return matchesSearch && matchesCategory;
+                  }).slice(0, 12).map((item) => (
+                    <Box component="tr" key={item.productId} sx={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <Box component="td" sx={{ py: 1, px: 1 }}>
+                        <Typography variant="body2">{item.productName}</Typography>
+                        <Typography variant="caption" color="text.secondary">{item.sku}</Typography>
+                      </Box>
+                      <Box component="td" sx={{ py: 1, px: 1 }}>{item.movingAverage}</Box>
+                      <Box component="td" sx={{ py: 1, px: 1 }}>{item.weightedMovingAverage}</Box>
+                      <Box component="td" sx={{ py: 1, px: 1 }}>{item.averageDailyDemand}</Box>
+                      <Box component="td" sx={{ py: 1, px: 1, fontWeight: 600 }}>{formatCurrency(item.forecastedDemand)}</Box>
+                      <Box component="td" sx={{ py: 1, px: 1 }}>{item.currentStock}</Box>
+                      <Box component="td" sx={{ py: 1, px: 1 }}>{item.daysOfStockRemaining}</Box>
+                      <Box component="td" sx={{ py: 1, px: 1 }}>
+                        <Box sx={{
+                          display: 'inline-block', px: 1, borderRadius: 1, fontSize: '0.75rem', fontWeight: 600,
+                          color: item.risk === 'critical' ? '#fff' : item.risk === 'high' ? '#fff' : item.risk === 'medium' ? '#92400e' : item.risk === 'low' ? '#1e40af' : '#166534',
+                          background: item.risk === 'critical' ? '#dc2626' : item.risk === 'high' ? '#ea580c' : item.risk === 'medium' ? '#fde68a' : item.risk === 'low' ? '#bfdbfe' : '#bbf7d0',
+                        }}>
+                          {item.risk.charAt(0).toUpperCase() + item.risk.slice(1)}
+                        </Box>
+                      </Box>
+                      <Box component="td" sx={{ py: 1, px: 1, maxWidth: 180 }}>{item.recommendation}</Box>
+                    </Box>
+                  ))}
+                </Box>
+              </Box>
+            </Box>
+          ) : (
+            <EmptyState compact title="No demand analysis data" message="No sales history is available to compute demand forecasts." />
           )}
         </Card>
 

@@ -8,10 +8,18 @@ from fastapi import HTTPException
 from fastapi.responses import PlainTextResponse, Response
 
 from backend.auth_utils import get_current_user
+from backend.cache import get_cached_forecast, set_cached_forecast, invalidate_forecast_cache
 from backend.database import DbDependency
-from backend.helpers import _ensure_sales_user, create_audit_log, create_notification
+from backend.helpers import (
+    AuditLogCollector,
+    NotificationCollector,
+    _ensure_sales_user,
+    create_audit_log,
+    create_notification,
+)
 from backend.models import Category, DemandForecast, ForecastHistory, ForecastSnapshot, Product, SalesTransaction, SalesTransactionLine
 from backend.schemas import (
+    DemandForecastDetailResponse,
     ForecastAccuracyResponse,
     ForecastCategoryResponse,
     ForecastProductResponse,
@@ -114,6 +122,172 @@ def _load_recent_sales_history(db: DbDependency, company_id: int) -> list[tuple[
     return [(month, monthly_sales[month]) for month in sorted(monthly_sales.keys())[-6:]]
 
 
+# ---------------------------------------------------------------------------
+# Demand forecasting algorithms
+# ---------------------------------------------------------------------------
+
+
+def _collect_daily_product_sales(
+    db: DbDependency,
+    company_id: int,
+    product_id: int,
+    lookback_days: int = 90,
+) -> list[tuple[str, float]]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    transactions = (
+        db.query(SalesTransaction)
+        .filter(
+            SalesTransaction.companyId == company_id,
+            SalesTransaction.saleDateTime >= cutoff,
+        )
+        .order_by(SalesTransaction.saleDateTime.asc())
+        .all()
+    )
+    if not transactions:
+        return []
+
+    tx_ids = [tx.id for tx in transactions]
+    lines = (
+        db.query(SalesTransactionLine)
+        .filter(
+            SalesTransactionLine.transactionId.in_(tx_ids),
+            SalesTransactionLine.productId == product_id,
+        )
+        .all()
+    )
+    if not lines:
+        return []
+
+    lines_by_tx: dict[int, list[SalesTransactionLine]] = defaultdict(list)
+    for line in lines:
+        lines_by_tx[line.transactionId].append(line)
+
+    daily_quantities: dict[str, float] = defaultdict(float)
+    for tx in transactions:
+        date_key = tx.saleDateTime.strftime("%Y-%m-%d") if tx.saleDateTime else None
+        if not date_key:
+            continue
+        qty = sum(line.quantity or 0 for line in lines_by_tx.get(tx.id, []))
+        if qty > 0:
+            daily_quantities[date_key] += float(qty)
+
+    return sorted(daily_quantities.items())
+
+
+def _collect_daily_company_sales(
+    db: DbDependency,
+    company_id: int,
+    lookback_days: int = 90,
+) -> list[tuple[str, float]]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    transactions = (
+        db.query(SalesTransaction)
+        .filter(
+            SalesTransaction.companyId == company_id,
+            SalesTransaction.saleDateTime >= cutoff,
+        )
+        .order_by(SalesTransaction.saleDateTime.asc())
+        .all()
+    )
+    if not transactions:
+        return []
+
+    tx_ids = [tx.id for tx in transactions]
+    lines = (
+        db.query(SalesTransactionLine)
+        .filter(SalesTransactionLine.transactionId.in_(tx_ids))
+        .all()
+    )
+    if not lines:
+        return []
+
+    lines_by_tx: dict[int, list[SalesTransactionLine]] = defaultdict(list)
+    for line in lines:
+        lines_by_tx[line.transactionId].append(line)
+
+    daily_quantities: dict[str, float] = defaultdict(float)
+    for tx in transactions:
+        date_key = tx.saleDateTime.strftime("%Y-%m-%d") if tx.saleDateTime else None
+        if not date_key:
+            continue
+        qty = sum(line.quantity or 0 for line in lines_by_tx.get(tx.id, []))
+        if qty > 0:
+            daily_quantities[date_key] += float(qty)
+
+    return sorted(daily_quantities.items())
+
+
+def _compute_moving_average(daily_sales: list[tuple[str, float]], window: int = 7) -> float:
+    if not daily_sales:
+        return 0.0
+    values = [v for _, v in daily_sales]
+    recent = values[-window:] if len(values) >= window else values
+    return round(sum(recent) / len(recent), 2) if recent else 0.0
+
+
+def _compute_weighted_moving_average(daily_sales: list[tuple[str, float]], window: int = 7) -> float:
+    if not daily_sales:
+        return 0.0
+    values = [v for _, v in daily_sales]
+    recent = values[-window:] if len(values) >= window else values
+    if not recent:
+        return 0.0
+    weights = list(range(1, len(recent) + 1))
+    weighted_sum = sum(val * w for val, w in zip(recent, weights))
+    weight_total = sum(weights)
+    return round(weighted_sum / weight_total, 2) if weight_total else 0.0
+
+
+def _compute_average_daily_demand(daily_sales: list[tuple[str, float]]) -> float:
+    if not daily_sales:
+        return 0.0
+    values = [v for _, v in daily_sales]
+    total_units = sum(values)
+    total_days = len(values)
+    return round(total_units / total_days, 2) if total_days else 0.0
+
+
+def _compare_stock_vs_demand(
+    forecasted_daily: float,
+    current_stock: int,
+    period_days: int,
+) -> dict[str, Any]:
+    forecasted_total = forecasted_daily * period_days
+    daily_rate = max(forecasted_daily, 0.01)
+    days_remaining = round(current_stock / daily_rate, 1) if daily_rate > 0 else 999.0
+    stock_gap = round(max(0.0, forecasted_total - current_stock), 1)
+
+    if days_remaining <= 3:
+        risk = "critical"
+    elif days_remaining <= 7:
+        risk = "high"
+    elif days_remaining <= 21:
+        risk = "medium"
+    elif days_remaining <= 45:
+        risk = "low"
+    else:
+        risk = "safe"
+
+    return {
+        "forecastedTotal": round(forecasted_total, 1),
+        "daysOfStockRemaining": days_remaining,
+        "stockGap": stock_gap,
+        "risk": risk,
+    }
+
+
+def _generate_recommendation(risk: str, stock: int, gap: float) -> str:
+    if risk == "critical":
+        return "Immediate Reorder Required"
+    if risk == "high":
+        return "Reorder Soon"
+    if risk == "medium":
+        return "Plan Reorder"
+    if risk == "low":
+        return "Monitor Stock Level"
+    return "Stock Level Adequate"
+
+
 def _upsert_demand_forecast_record(
     db: DbDependency,
     company_id: int,
@@ -168,6 +342,11 @@ def get_forecast_summary(db: DbDependency, authorization: str | None = None, per
     user = get_current_user(db, token)
     _ensure_sales_user(user)
 
+    cache_params = {"period": period, "start_date": start_date, "end_date": end_date}
+    cached = get_cached_forecast(user.companyId, "forecast_summary", **cache_params)
+    if cached is not None:
+        return cached
+
     history = _load_recent_sales_history(db, user.companyId)
     if not history:
         raise HTTPException(status_code=400, detail="Forecast generation requires historical sales data")
@@ -220,6 +399,7 @@ def get_forecast_summary(db: DbDependency, authorization: str | None = None, per
         f"Forecast generated for {period_label.lower()} with projected demand {summary.forecastedDemand:.2f}.",
         "forecast_generated",
     )
+    set_cached_forecast(user.companyId, "forecast_summary", summary, ttl=300, **cache_params)
     return summary
 
 
@@ -227,6 +407,11 @@ def get_forecast_products(db: DbDependency, authorization: str | None = None, pe
     token = _extract_token(authorization)
     user = get_current_user(db, token)
     _ensure_sales_user(user)
+
+    cache_params = {"period": period, "start_date": start_date, "end_date": end_date}
+    cached = get_cached_forecast(user.companyId, "forecast_products", **cache_params)
+    if cached is not None:
+        return cached
 
     products = (
         db.query(Product)
@@ -254,6 +439,9 @@ def get_forecast_products(db: DbDependency, authorization: str | None = None, pe
     forecasts: list[ForecastProductResponse] = []
     period_label, _ = _resolve_forecast_period(period, start_date, end_date)
     normalized_period = _normalize_forecast_period(period)
+    notif_collector = NotificationCollector(db)
+    audit_collector = AuditLogCollector(db)
+    category_cache: dict[int, str] = {}
     for product in products:
         product_lines = lines_by_product.get(product.id, [])
         monthly_history: list[tuple[str, float]] = []
@@ -276,6 +464,17 @@ def get_forecast_products(db: DbDependency, authorization: str | None = None, pe
         confidence_level = round(min(99.0, max(55.0, 70.0 + (len(ordered_history) * 2.5))), 2)
         historical_sales = sum(item[1] for item in ordered_history)
         accuracy_score = round(max(0.0, min(100.0, 100.0 - abs(next_forecast - historical_sales) / max(abs(historical_sales), 1.0) * 100.0)), 2) if historical_sales else 100.0
+
+        period_label_detail, period_days_detail = _resolve_forecast_period(period, start_date, end_date)
+        lookback = max(period_days_detail, 90)
+        daily_sales = _collect_daily_product_sales(db, user.companyId, product.id, lookback)
+        ma = _compute_moving_average(daily_sales, window=7)
+        wma = _compute_weighted_moving_average(daily_sales, window=7)
+        add = _compute_average_daily_demand(daily_sales)
+        best_daily = max(ma, wma, add)
+        comparison = _compare_stock_vs_demand(best_daily, current_stock, period_days_detail)
+        recommendation = _generate_recommendation(comparison["risk"], current_stock, comparison["stockGap"])
+
         _upsert_demand_forecast_record(
             db,
             user.companyId,
@@ -288,8 +487,7 @@ def get_forecast_products(db: DbDependency, authorization: str | None = None, pe
             accuracy_score,
         )
         if current_stock <= 0:
-            create_notification(
-                db,
+            notif_collector.add(
                 user.companyId,
                 product.id,
                 product.name,
@@ -297,8 +495,7 @@ def get_forecast_products(db: DbDependency, authorization: str | None = None, pe
                 "forecast_out_of_stock",
             )
         elif next_forecast > historical_sales * 1.2 and current_stock < max(1, int(product.initialStockQuantity or 0) // 4 if product.initialStockQuantity else 5) * 2:
-            create_notification(
-                db,
+            notif_collector.add(
                 user.companyId,
                 product.id,
                 product.name,
@@ -306,58 +503,78 @@ def get_forecast_products(db: DbDependency, authorization: str | None = None, pe
                 "forecast_demand_exceeds_inventory",
             )
         elif next_forecast > historical_sales * 1.1:
-            create_notification(
-                db,
+            notif_collector.add(
                 user.companyId,
                 product.id,
                 product.name,
                 f"{product.name} shows significant demand growth.",
                 "demand_growth_alert",
             )
-        create_audit_log(
-            db,
+
+        if product.categoryId not in category_cache:
+            cat_obj = db.query(Category).filter(Category.id == product.categoryId).first()
+            category_cache[product.categoryId] = cat_obj.name if cat_obj else "Uncategorized"
+
+        audit_collector.add(
             company=str(user.companyId),
             user=user.email,
             action="Inventory Recommendation Generated",
             entity_name=product.name,
             product_name=product.name,
-            category_name=(db.query(Category).filter(Category.id == product.categoryId).first().name if product.categoryId else "Uncategorized"),
+            category_name=category_cache[product.categoryId],
             forecast_period=period_label,
             ip_address="Unknown",
             browser="Unknown",
+            deduplicate_key=f"forecast_product:{product.id}",
         )
         forecasts.append(
             ForecastProductResponse(
                 id=product.id,
                 name=product.name or "Unknown",
-                categoryName=(db.query(Category).filter(Category.id == product.categoryId).first().name if product.categoryId else "Uncategorized"),
+                categoryName=category_cache.get(product.categoryId, "Uncategorized"),
                 currentStock=current_stock,
                 historicalDemand=sum(item[1] for item in ordered_history),
                 forecastedDemand=round(next_forecast, 2),
                 forecastPeriod=period_label,
                 confidenceLevel=confidence_level,
                 forecastPoints=forecast_points,
+                movingAverage=ma,
+                weightedMovingAverage=wma,
+                averageDailyDemand=add,
+                daysOfStockRemaining=comparison["daysOfStockRemaining"],
+                stockGap=comparison["stockGap"],
+                risk=comparison["risk"],
+                recommendation=recommendation,
             )
         )
 
     _persist_forecast_snapshot(db, user.companyId, "products", period or "30d", [forecast.model_dump() for forecast in forecasts])
     if forecasts:
         top_product = max(forecasts, key=lambda item: item.forecastedDemand)
-        create_notification(
-            db,
+        notif_collector.add(
             user.companyId,
             top_product.id,
             top_product.name,
             f"{top_product.name} shows significant demand growth in the forecast window.",
             "demand_growth_alert",
         )
-    return sorted(forecasts, key=lambda item: (-item.forecastedDemand, item.name))
+    audit_collector.flush()
+    notif_collector.flush()
+    db.commit()
+    result = sorted(forecasts, key=lambda item: (-item.forecastedDemand, item.name))
+    set_cached_forecast(user.companyId, "forecast_products", result, ttl=300, **cache_params)
+    return result
 
 
 def get_forecast_categories(db: DbDependency, authorization: str | None = None, period: str | None = None, start_date: str | None = None, end_date: str | None = None) -> list[ForecastCategoryResponse]:
     token = _extract_token(authorization)
     user = get_current_user(db, token)
     _ensure_sales_user(user)
+
+    cache_params = {"period": period, "start_date": start_date, "end_date": end_date}
+    cached = get_cached_forecast(user.companyId, "forecast_categories", **cache_params)
+    if cached is not None:
+        return cached
 
     categories = (
         db.query(Category)
@@ -415,7 +632,9 @@ def get_forecast_categories(db: DbDependency, authorization: str | None = None, 
         )
 
     _persist_forecast_snapshot(db, user.companyId, "categories", period or "30d", [forecast.model_dump() for forecast in forecasts])
-    return sorted(forecasts, key=lambda item: (-item.predictedDemand, item.name))
+    result = sorted(forecasts, key=lambda item: (-item.predictedDemand, item.name))
+    set_cached_forecast(user.companyId, "forecast_categories", result, ttl=300, **cache_params)
+    return result
 
 
 def export_demand_forecast_report(db: DbDependency, authorization: str | None = None) -> Response:
@@ -488,6 +707,10 @@ def get_forecast_accuracy(db: DbDependency, authorization: str | None = None) ->
     user = get_current_user(db, token)
     _ensure_sales_user(user)
 
+    cached = get_cached_forecast(user.companyId, "forecast_accuracy")
+    if cached is not None:
+        return cached
+
     transactions = (
         db.query(SalesTransaction)
         .filter(SalesTransaction.companyId == user.companyId)
@@ -515,4 +738,103 @@ def get_forecast_accuracy(db: DbDependency, authorization: str | None = None) ->
     bias = round(forecast - actual, 2)
     accuracy_response = ForecastAccuracyResponse(accuracy=accuracy, totalObservations=len(historical_points), bias=bias)
     _persist_forecast_snapshot(db, user.companyId, "accuracy", "30d", accuracy_response.model_dump())
+    set_cached_forecast(user.companyId, "forecast_accuracy", accuracy_response, ttl=300)
     return accuracy_response
+
+
+def get_demand_forecast_detail(
+    db: DbDependency,
+    authorization: str | None = None,
+    period: str | None = None,
+    product_id: int | None = None,
+) -> list[DemandForecastDetailResponse]:
+    token = _extract_token(authorization)
+    user = get_current_user(db, token)
+    _ensure_sales_user(user)
+
+    cache_params = {"period": period, "product_id": product_id}
+    cached = get_cached_forecast(user.companyId, "demand_detail", **cache_params)
+    if cached is not None:
+        return cached
+
+    period_label, period_days = _resolve_forecast_period(period)
+    lookback = max(period_days, 90)
+
+    products_query = (
+        db.query(Product)
+        .filter(Product.companyId == user.companyId)
+        .filter((Product.status.is_(None)) | (Product.status == "active"))
+    )
+    if product_id is not None:
+        products_query = products_query.filter(Product.id == product_id)
+    products = products_query.all()
+
+    if not products:
+        return []
+
+    category_cache: dict[int, str] = {}
+    results: list[DemandForecastDetailResponse] = []
+    audit_collector = AuditLogCollector(db)
+
+    for product in products:
+        cat_name = "Uncategorized"
+        if product.categoryId and product.categoryId not in category_cache:
+            cat = db.query(Category).filter(Category.id == product.categoryId).first()
+            category_cache[product.categoryId] = cat.name if cat else "Uncategorized"
+        if product.categoryId:
+            cat_name = category_cache.get(product.categoryId, "Uncategorized")
+
+        daily_sales = _collect_daily_product_sales(db, user.companyId, product.id, lookback)
+        current_stock = product.stockQuantity or 0
+
+        ma = _compute_moving_average(daily_sales, window=7)
+        wma = _compute_weighted_moving_average(daily_sales, window=7)
+        add = _compute_average_daily_demand(daily_sales)
+
+        best_daily = max(ma, wma, add)
+        comparison = _compare_stock_vs_demand(best_daily, current_stock, period_days)
+        recommendation = _generate_recommendation(comparison["risk"], current_stock, comparison["stockGap"])
+
+        audit_collector.add(
+            company=str(user.companyId),
+            user=user.email,
+            action="Demand Forecast Generated",
+            entity_name=product.name,
+            product_name=product.name,
+            category_name=cat_name,
+            forecast_period=period_label,
+            ip_address="Unknown",
+            browser="Unknown",
+            deduplicate_key=f"demand_forecast:{product.id}",
+        )
+
+        results.append(DemandForecastDetailResponse(
+            productId=product.id,
+            productName=product.name or "Unknown",
+            sku=product.sku or "",
+            categoryName=cat_name,
+            currentStock=current_stock,
+            movingAverage=ma,
+            weightedMovingAverage=wma,
+            averageDailyDemand=add,
+            forecastedDemand=round(best_daily * period_days, 2),
+            daysOfStockRemaining=comparison["daysOfStockRemaining"],
+            stockGap=comparison["stockGap"],
+            risk=comparison["risk"],
+            recommendation=recommendation,
+            forecastPeriod=period_label,
+            forecastWindowDays=period_days,
+        ))
+
+    _persist_forecast_snapshot(
+        db,
+        user.companyId,
+        "demand_detail",
+        period or "30d",
+        [r.model_dump() for r in results],
+    )
+    audit_collector.flush()
+    db.commit()
+    result = sorted(results, key=lambda r: ({"critical": 0, "high": 1, "medium": 2, "low": 3, "safe": 4}.get(r.risk, 5), r.productName))
+    set_cached_forecast(user.companyId, "demand_detail", result, ttl=300, **cache_params)
+    return result

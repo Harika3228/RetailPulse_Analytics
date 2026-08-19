@@ -340,6 +340,7 @@ class ProductRequest(BaseModel):
     costPrice: float
     stockQuantity: int | None = None
     initialStockQuantity: int | None = None
+    maxStockLevel: int | None = None
     unitOfMeasure: str
     status: str | None = "active"
 
@@ -405,6 +406,7 @@ class ProductResponse(BaseModel):
     costPrice: float
     stockQuantity: int
     initialStockQuantity: int
+    maxStockLevel: int | None = None
     unitOfMeasure: str
     status: str
     createdAt: str | None = None
@@ -428,6 +430,7 @@ class InventoryResponse(BaseModel):
     reorderLevel: int
     stockStatus: str
     status: str
+    riskClassification: str = "healthy"
     recommendation: str = "Stock Level Healthy"
     predictedDemand: float = 0.0
     growthRate: float = 0.0
@@ -650,6 +653,13 @@ class ForecastProductResponse(BaseModel):
     forecastPeriod: str = "Next 30 Days"
     confidenceLevel: float
     forecastPoints: list[ForecastPoint] = Field(default_factory=list)
+    movingAverage: float = 0.0
+    weightedMovingAverage: float = 0.0
+    averageDailyDemand: float = 0.0
+    daysOfStockRemaining: float = 0.0
+    stockGap: float = 0.0
+    risk: str = "safe"
+    recommendation: str = "Stock Level Adequate"
 
 
 class ForecastCategoryResponse(BaseModel):
@@ -664,3 +674,156 @@ class ForecastAccuracyResponse(BaseModel):
     accuracy: float
     totalObservations: int
     bias: float
+
+
+class DemandForecastDetailResponse(BaseModel):
+    productId: int
+    productName: str
+    sku: str
+    categoryName: str
+    currentStock: int
+    movingAverage: float
+    weightedMovingAverage: float
+    averageDailyDemand: float
+    forecastedDemand: float
+    daysOfStockRemaining: float
+    stockGap: float
+    risk: str
+    recommendation: str
+    forecastPeriod: str
+    forecastWindowDays: int
+
+
+# ---------------------------------------------------------------------------
+# Inventory forecast / smart replenishment schemas
+# ---------------------------------------------------------------------------
+
+class InventoryForecastItemResponse(BaseModel):
+    productId: int
+    productName: str
+    sku: str
+    categoryId: int | None = None
+    categoryName: str | None = None
+    brand: str
+    currentStock: int
+    averageDailySales: float
+    forecastedDemand: float
+    daysOfStockRemaining: float
+    leadTime: int = 4
+    reorderPoint: int
+    safetyStock: int = 0
+    maxStockLevel: int | None = None
+    recommendedReorderQty: int
+    stockRisk: str
+    riskClassification: str = "healthy"
+    reorderRequired: bool = False
+    recommendation: str
+
+
+class InventoryForecastSummaryResponse(BaseModel):
+    totalProducts: int
+    reorderRequiredCount: int = 0
+    outOfStockCount: int
+    stockoutRiskCount: int
+    lowStockCount: int
+    healthyCount: int
+    overstockCount: int
+    totalReorderQty: int
+    items: list[InventoryForecastItemResponse]
+
+
+class ForecastSeriesPoint(BaseModel):
+    date: str
+    demand: float
+
+
+class ForecastSeriesResponse(BaseModel):
+    productId: int
+    productName: str
+    historical: list[ForecastSeriesPoint] = Field(default_factory=list)
+    forecast: list[ForecastSeriesPoint] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Inventory recommendation schemas
+# ---------------------------------------------------------------------------
+
+class InventoryRecommendationItem(BaseModel):
+    productId: int
+    productName: str
+    sku: str
+    categoryId: int | None = None
+    categoryName: str | None = None
+    brand: str
+    currentStock: int
+    averageDailySales: float
+    forecastedDemand: float
+    daysOfStockRemaining: float
+    leadTime: int = 4
+    reorderPoint: int
+    safetyStock: int = 0
+    maxStockLevel: int | None = None
+    recommendedReorderQty: int
+    stockRisk: str
+    riskClassification: str = "healthy"
+    reorderRequired: bool = False
+    recommendation: str
+    actionSeverity: str = "ok"
+    actionMessage: str = ""
+
+
+class InventoryRecommendationSummary(BaseModel):
+    totalProducts: int
+    reorderRequiredCount: int = 0
+    actionRequiredCount: int
+    reviewNeededCount: int
+    optimalCount: int
+    stockoutRiskCount: int = 0
+    overstockCount: int = 0
+    healthyCount: int = 0
+    totalReorderQty: int
+    estimatedReorderCost: float = 0.0
+    items: list[InventoryRecommendationItem]
+
+
+class WeeklyDemandPoint(BaseModel):
+    weekStart: str
+    sales: float
+
+
+class TrendAnalysis(BaseModel):
+    direction: str = "stable"
+    percentageChange: float = 0.0
+    averageMonthlySales: float = 0.0
+    peakMonth: str | None = None
+    peakSales: float = 0.0
+
+
+class ProductRecommendationDetail(BaseModel):
+    productId: int
+    productName: str
+    sku: str
+    categoryId: int | None = None
+    categoryName: str | None = None
+    brand: str
+    currentStock: int
+    averageDailySales: float
+    forecastedDemand: float
+    daysOfStockRemaining: float
+    leadTime: int = 4
+    reorderPoint: int
+    safetyStock: int = 0
+    maxStockLevel: int | None = None
+    recommendedReorderQty: int
+    stockRisk: str
+    riskClassification: str = "healthy"
+    reorderRequired: bool = False
+    recommendation: str
+    actionSeverity: str = "ok"
+    actionMessage: str = ""
+    costPrice: float = 0.0
+    unitPrice: float = 0.0
+    estimatedReorderCost: float = 0.0
+    weeklyDemand: list[WeeklyDemandPoint] = Field(default_factory=list)
+    trendAnalysis: TrendAnalysis = Field(default_factory=TrendAnalysis)
+    monthlyHistory: list[dict[str, Any]] = Field(default_factory=list)

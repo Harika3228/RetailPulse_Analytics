@@ -5,6 +5,7 @@ from sqlalchemy import asc, desc
 from sqlalchemy.exc import IntegrityError
 
 from backend.auth_utils import get_company_for_user, get_current_user
+from backend.cache import invalidate_forecast_cache
 from backend.database import DbDependency
 from backend.helpers import _ensure_admin, _normalize_sku, _to_product_response, create_audit_log
 from backend.models import Category, Product
@@ -98,6 +99,7 @@ def create_product(
         costPrice=payload.costPrice,
         stockQuantity=payload.stockQuantity,
         initialStockQuantity=payload.stockQuantity,
+        maxStockLevel=payload.maxStockLevel,
         unitOfMeasure=payload.unitOfMeasure.strip(),
         price=str(payload.unitPrice),
         status=(payload.status or "active").lower(),
@@ -110,6 +112,7 @@ def create_product(
         db.rollback()
         raise HTTPException(status_code=400, detail="SKU already exists")
     db.refresh(p)
+    invalidate_forecast_cache(user.companyId)
     create_audit_log(db, company=company.name, user=user.email, action="Product Created",
                      entity_name=p.name, ip_address="Unknown", browser="Unknown")
     return _to_product_response(p)
@@ -170,6 +173,7 @@ def update_product(
     p.costPrice = payload.costPrice
     p.stockQuantity = payload.stockQuantity
     p.initialStockQuantity = payload.stockQuantity
+    p.maxStockLevel = payload.maxStockLevel
     p.unitOfMeasure = payload.unitOfMeasure.strip()
     p.price = str(payload.unitPrice)
     p.status = (payload.status or p.status or "active").lower()
@@ -180,6 +184,7 @@ def update_product(
         db.rollback()
         raise HTTPException(status_code=400, detail="SKU already exists")
     db.refresh(p)
+    invalidate_forecast_cache(user.companyId)
     create_audit_log(db, company=company.name, user=user.email, action="Product Updated",
                      entity_name=p.name, ip_address="Unknown", browser="Unknown")
     return _to_product_response(p)
@@ -197,6 +202,7 @@ def delete_product(product_id: int, db: DbDependency, authorization: str | None 
     product_name = p.name
     db.delete(p)
     db.commit()
+    invalidate_forecast_cache(user.companyId)
     create_audit_log(db, company=company.name, user=user.email, action="Product Deleted",
                      entity_name=product_name, ip_address="Unknown", browser="Unknown")
     return {"message": "Product deleted"}
@@ -225,6 +231,7 @@ def update_product_status(
     product.updatedAt = datetime.now(timezone.utc)
     db.commit()
     db.refresh(product)
+    invalidate_forecast_cache(user.companyId)
 
     action = "Product Activated" if normalized == "active" else "Product Deactivated"
     create_audit_log(db, company=company.name, user=user.email, action=action,

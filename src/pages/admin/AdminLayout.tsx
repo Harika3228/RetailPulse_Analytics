@@ -16,6 +16,9 @@ function getSectionFromPath(pathname) {
   if (pathname === '/notifications') {
     return 'Notifications';
   }
+  if (pathname === '/inventory/forecast') {
+    return 'Inventory Forecast';
+  }
   if (pathname.startsWith('/inventory')) {
     return 'Inventory';
   }

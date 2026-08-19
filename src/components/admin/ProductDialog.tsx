@@ -86,6 +86,13 @@ export default function ProductDialog({
               onChange={(event) => onChange({ ...form, stockQuantity: event.target.value })}
               fullWidth
             />
+            <TextField
+              label="Max Stock Level"
+              type="number"
+              value={form.maxStockLevel ?? ''}
+              onChange={(event) => onChange({ ...form, maxStockLevel: event.target.value || null })}
+              fullWidth
+            />
           </Stack>
           <TextField
             label="Unit Of Measure *"

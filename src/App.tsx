@@ -16,6 +16,7 @@ import ProductDetailsPage from './pages/admin/ProductDetailsPage.tsx';
 import CustomersPage from './pages/admin/CustomersPage.tsx';
 import CustomerDetailsPage from './pages/admin/CustomerDetailsPage.tsx';
 import InventoryPage from './pages/admin/InventoryPage.tsx';
+import InventoryForecastPage from './pages/admin/InventoryForecastPage.tsx';
 import AuditLogsPage from './pages/admin/AuditLogsPage.tsx';
 import ForecastingPage from './pages/admin/ForecastingPage.tsx';
 import { AuthProvider, useAuth } from './auth/AuthContext.tsx';
@@ -130,6 +131,14 @@ function AppRoutes() {
         element={
           <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
             <InventoryPage />
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/inventory/forecast"
+        element={
+          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+            <InventoryForecastPage />
           </RoleProtectedRoute>
         }
       />

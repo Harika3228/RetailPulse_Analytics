@@ -182,9 +182,9 @@ def ensure_schema() -> None:
         # products
         for col in ("companyId", "categoryId", "sku", "name", "brand", "description",
                     "unitPrice", "costPrice", "stockQuantity", "initialStockQuantity",
-                    "unitOfMeasure", "price", "createdAt", "updatedAt"):
+                    "maxStockLevel", "unitOfMeasure", "price", "createdAt", "updatedAt"):
             if col not in product_columns:
-                col_type = "FLOAT" if col in ("unitPrice", "costPrice") else "INTEGER" if col in ("companyId", "categoryId", "stockQuantity", "initialStockQuantity") else "DATETIME" if col in ("createdAt", "updatedAt") else "VARCHAR"
+                col_type = "FLOAT" if col in ("unitPrice", "costPrice") else "INTEGER" if col in ("companyId", "categoryId", "stockQuantity", "initialStockQuantity", "maxStockLevel") else "DATETIME" if col in ("createdAt", "updatedAt") else "VARCHAR"
                 connection.execute(text(f"ALTER TABLE products ADD COLUMN {col} {col_type}"))
         if "status" not in product_columns:
             connection.execute(text("ALTER TABLE products ADD COLUMN status VARCHAR DEFAULT 'active'"))

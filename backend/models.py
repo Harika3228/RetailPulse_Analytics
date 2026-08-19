@@ -106,6 +106,7 @@ class Product(Base):
     costPrice = Column(Float)
     stockQuantity = Column(Integer)
     initialStockQuantity = Column(Integer)
+    maxStockLevel = Column(Integer, nullable=True)
     unitOfMeasure = Column(String)
     price = Column(String)  # legacy compatibility
     status = Column(String, default="active")

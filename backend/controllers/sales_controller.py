@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from sqlalchemy import asc, desc, func
 
 from backend.auth_utils import get_company_for_user, get_current_user
+from backend.cache import invalidate_forecast_cache
 from backend.controllers.customers_controller import refresh_customer_metrics_for_company
 from backend.database import DbDependency
 from backend.helpers import (
@@ -265,6 +266,7 @@ def create_sales_transaction(payload: SalesTransactionRequest, db: DbDependency,
     ).update({"reference": tx.invoiceNumber}, synchronize_session=False)
     db.commit()
     refresh_customer_metrics_for_company(db, user.companyId)
+    invalidate_forecast_cache(user.companyId)
 
     create_audit_log(db, company=company.name, user=user.email,
                      action="Sale Created", entity_name=tx.invoiceNumber, invoice_number=tx.invoiceNumber,
@@ -318,6 +320,7 @@ def update_sales_transaction(transaction_id: int, payload: SalesTransactionReque
         db.rollback()
         raise
 
+    invalidate_forecast_cache(user.companyId)
     create_audit_log(db, company=company.name, user=user.email,
                      action="Sale Updated", entity_name=tx.invoiceNumber, invoice_number=tx.invoiceNumber,
                      product_name=new_line_payloads[0]["product"].name if new_line_payloads else None,
@@ -354,6 +357,7 @@ def delete_sales_transaction(transaction_id: int, db: DbDependency, authorizatio
     db.delete(tx)
     db.commit()
     refresh_customer_metrics_for_company(db, user.companyId)
+    invalidate_forecast_cache(user.companyId)
 
     create_audit_log(db, company=company.name, user=user.email,
                      action="Sale Deleted", entity_name=tx.invoiceNumber, invoice_number=tx.invoiceNumber,
