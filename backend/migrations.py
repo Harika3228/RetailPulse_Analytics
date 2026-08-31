@@ -265,6 +265,45 @@ def ensure_schema() -> None:
         if "remainingStockSnapshot" not in sales_line_columns:
             connection.execute(text("ALTER TABLE sale_items ADD COLUMN remainingStockSnapshot INTEGER"))
 
+        # data import / integration management
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS import_batches (
+                id INTEGER PRIMARY KEY,
+                companyId INTEGER,
+                entityType VARCHAR,
+                fileName VARCHAR,
+                totalRows INTEGER DEFAULT 0,
+                validCount INTEGER DEFAULT 0,
+                invalidCount INTEGER DEFAULT 0,
+                duplicateCount INTEGER DEFAULT 0,
+                insertedCount INTEGER DEFAULT 0,
+                updatedCount INTEGER DEFAULT 0,
+                failedCount INTEGER DEFAULT 0,
+                status VARCHAR DEFAULT 'pending',
+                importedBy VARCHAR,
+                createdAt DATETIME,
+                completedAt DATETIME
+            )
+        """))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_import_batches_companyId ON import_batches(companyId)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_import_batches_entityType ON import_batches(entityType)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_import_batches_status ON import_batches(status)"))
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS import_records (
+                id INTEGER PRIMARY KEY,
+                batchId INTEGER,
+                companyId INTEGER,
+                rowNumber INTEGER,
+                status VARCHAR,
+                message VARCHAR,
+                rowData TEXT,
+                createdAt DATETIME
+            )
+        """))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_import_records_batchId ON import_records(batchId)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_import_records_companyId ON import_records(companyId)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_import_records_status ON import_records(status)"))
+
         # data normalisations
         connection.execute(text("UPDATE products SET sku = UPPER(TRIM(sku)) WHERE sku IS NOT NULL"))
         connection.execute(text(

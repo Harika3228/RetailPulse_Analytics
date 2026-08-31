@@ -827,3 +827,84 @@ class ProductRecommendationDetail(BaseModel):
     weeklyDemand: list[WeeklyDemandPoint] = Field(default_factory=list)
     trendAnalysis: TrendAnalysis = Field(default_factory=TrendAnalysis)
     monthlyHistory: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Data import / integration schemas
+# ---------------------------------------------------------------------------
+
+class ImportPreviewRow(BaseModel):
+    rowNumber: int
+    status: str  # valid / invalid / duplicate
+    messages: list[str] = Field(default_factory=list)
+    data: dict[str, Any] = Field(default_factory=dict)
+    rawData: dict[str, Any] = Field(default_factory=dict)
+
+
+class ImportPreviewResponse(BaseModel):
+    batchId: int
+    entityType: str
+    fileName: str
+    totalRows: int
+    validRows: int
+    invalidRows: int
+    duplicateRows: int
+    columns: list[str] = Field(default_factory=list)
+    columnMapping: dict[str, str] = Field(default_factory=dict)
+    rows: list[ImportPreviewRow] = Field(default_factory=list)
+
+
+class ImportRecordResponse(BaseModel):
+    id: int
+    rowNumber: int
+    status: str
+    message: str | None = None
+    rowData: dict[str, Any] = Field(default_factory=dict)
+
+
+class ImportErrorResponse(BaseModel):
+    rowNumber: int
+    field: str | None = None
+    message: str
+    status: str
+
+
+class ImportErrorsResponse(BaseModel):
+    batchId: int
+    totalErrors: int
+    errors: list[ImportErrorResponse] = Field(default_factory=list)
+
+
+class ImportBatchResponse(BaseModel):
+    id: int
+    entityType: str
+    fileName: str
+    totalRows: int
+    validCount: int
+    invalidCount: int
+    duplicateCount: int
+    insertedCount: int
+    updatedCount: int
+    failedCount: int
+    status: str
+    importedBy: str | None = None
+    createdAt: str | None = None
+    completedAt: str | None = None
+
+
+class ImportBatchDetailResponse(ImportBatchResponse):
+    rows: list[ImportRecordResponse] = Field(default_factory=list)
+
+
+class ImportConfirmResponse(BaseModel):
+    batchId: int
+    entityType: str
+    fileName: str
+    status: str
+    totalRows: int
+    insertedCount: int
+    updatedCount: int
+    failedCount: int
+    invalidCount: int
+    duplicateCount: int
+    skippedCount: int

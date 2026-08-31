@@ -483,7 +483,10 @@ export default function DashboardSummaryPage() {
                   ) : (
                     <Box sx={{ display: 'grid', gap: 1, mt: 1.5 }}>
                       {analyticsSummary.topCustomersByRevenue.length ? analyticsSummary.topCustomersByRevenue.map((customer) => (
-                        <Box key={customer.name} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <Box
+                          key={`${customer.name}-${customer.revenue}`}
+                          sx={{ display: 'flex', justifyContent: 'space-between' }}
+                        >
                           <Typography variant="body2">{customer.name}</Typography>
                           <Typography variant="body2" color="text.secondary">{currencyFormatter.format(customer.revenue)}</Typography>
                         </Box>

@@ -221,6 +221,37 @@ class StockMovement(Base):
     createdAt = Column(DateTime, default=datetime.now(timezone.utc))
 
 
+class ImportBatch(Base):
+    __tablename__ = "import_batches"
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    entityType = Column(String, index=True)
+    fileName = Column(String)
+    totalRows = Column(Integer, default=0)
+    validCount = Column(Integer, default=0)
+    invalidCount = Column(Integer, default=0)
+    duplicateCount = Column(Integer, default=0)
+    insertedCount = Column(Integer, default=0)
+    updatedCount = Column(Integer, default=0)
+    failedCount = Column(Integer, default=0)
+    status = Column(String, default="pending", index=True)
+    importedBy = Column(String)
+    createdAt = Column(DateTime, default=datetime.now(timezone.utc))
+    completedAt = Column(DateTime)
+
+
+class ImportRecord(Base):
+    __tablename__ = "import_records"
+    id = Column(Integer, primary_key=True, index=True)
+    batchId = Column(Integer, index=True)
+    companyId = Column(Integer, index=True)
+    rowNumber = Column(Integer)
+    status = Column(String, index=True)  # valid / invalid / duplicate / imported / failed
+    message = Column(String)
+    rowData = Column(String)
+    createdAt = Column(DateTime, default=datetime.now(timezone.utc))
+
+
 class ForecastSnapshot(Base):
     __tablename__ = "forecast_snapshots"
     id = Column(Integer, primary_key=True, index=True)

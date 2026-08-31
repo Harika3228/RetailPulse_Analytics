@@ -31,6 +31,9 @@ function getSectionFromPath(pathname) {
   if (pathname.startsWith('/customers')) {
     return 'Customers';
   }
+  if (pathname === '/data-import' || pathname === '/data-imports') {
+    return 'Data Imports';
+  }
   if (pathname === '/forecasting') {
     return 'Forecasting';
   }

@@ -239,5 +239,52 @@ class CompanyIsolationTests(unittest.TestCase):
         self.assertEqual(delete_foreign_sale.status_code, 404)
 
 
+    def test_company_admin_cannot_access_other_company_imports(self):
+        suffix_a = uuid.uuid4().hex[:8]
+        suffix_b = uuid.uuid4().hex[:8]
+
+        token_a, _company_a = self._register_company_admin(suffix_a)
+        token_b, _company_b = self._register_company_admin(suffix_b)
+
+        csv_text = (
+            "name,email,phone\n"
+            f"Import Isolation {suffix_a},isolation-{suffix_a}@example.com,+1-555-100{str(int(suffix_a[:4], 16) % 10000):04d}\n"
+        )
+        preview_a = self.client.post(
+            f"/imports/customers/preview?fileName=isolation.csv",
+            content=csv_text,
+            headers={
+                "Authorization": f"Bearer {token_a}",
+                "Content-Type": "text/csv",
+            },
+        )
+        self.assertEqual(preview_a.status_code, 200, preview_a.text)
+        batch_id = preview_a.json()["batchId"]
+
+        # Company B cannot see Company A's import batch in history.
+        history_b = self.client.get("/imports", headers={"Authorization": f"Bearer {token_b}"})
+        self.assertEqual(history_b.status_code, 200)
+        self.assertFalse(any(item["id"] == batch_id for item in history_b.json()))
+
+        # Company B cannot fetch Company A's import batch detail.
+        detail_b = self.client.get(f"/imports/{batch_id}", headers={"Authorization": f"Bearer {token_b}"})
+        self.assertEqual(detail_b.status_code, 404)
+
+        # Company B cannot export Company A's failed records.
+        export_b = self.client.get(f"/imports/{batch_id}/failed-records", headers={"Authorization": f"Bearer {token_b}"})
+        self.assertEqual(export_b.status_code, 404)
+
+        # Company B cannot confirm or delete Company A's import batch.
+        confirm_b = self.client.post(f"/imports/{batch_id}/confirm", headers={"Authorization": f"Bearer {token_b}"})
+        self.assertEqual(confirm_b.status_code, 404)
+
+        delete_b = self.client.delete(f"/imports/{batch_id}", headers={"Authorization": f"Bearer {token_b}"})
+        self.assertEqual(delete_b.status_code, 404)
+
+        # Sanity: Company A can still read and confirm its own import batch.
+        detail_a = self.client.get(f"/imports/{batch_id}", headers={"Authorization": f"Bearer {token_a}"})
+        self.assertEqual(detail_a.status_code, 200)
+
+
 if __name__ == "__main__":
     unittest.main()
