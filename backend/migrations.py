@@ -142,6 +142,22 @@ def ensure_schema() -> None:
             connection.execute(text("ALTER TABLE refresh_tokens ADD COLUMN createdAt DATETIME"))
 
         # audit_logs
+        if "companyId" not in audit_columns:
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN companyId INTEGER"))
+        if "userId" not in audit_columns:
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN userId INTEGER"))
+        if "resourceType" not in audit_columns:
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN resourceType VARCHAR"))
+        if "resourceId" not in audit_columns:
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN resourceId VARCHAR"))
+        if "description" not in audit_columns:
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN description VARCHAR"))
+        if "userAgent" not in audit_columns:
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN userAgent VARCHAR"))
+        if "createdAt" not in audit_columns:
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN createdAt DATETIME"))
+        if "status" not in audit_columns:
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN status VARCHAR DEFAULT 'success'"))
         if "company" not in audit_columns:
             connection.execute(text("ALTER TABLE audit_logs ADD COLUMN company VARCHAR"))
         if "entityName" not in audit_columns:

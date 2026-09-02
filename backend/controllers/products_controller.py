@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
@@ -114,7 +115,9 @@ def create_product(
     db.refresh(p)
     invalidate_forecast_cache(user.companyId)
     create_audit_log(db, company=company.name, user=user.email, action="Product Created",
-                     entity_name=p.name, ip_address="Unknown", browser="Unknown")
+                     entity_name=p.name, resource_type="Product", resource_id=p.id,
+                     description=json.dumps({"after": {"name": p.name, "sku": p.sku, "status": p.status, "unitPrice": p.unitPrice, "stockQuantity": p.stockQuantity}}),
+                     company_id=user.companyId, user_id=user.id, ip_address="Unknown", browser="Unknown")
     return _to_product_response(p)
 
 
@@ -145,6 +148,8 @@ def update_product(
     p = db.query(Product).filter(Product.id == product_id, Product.companyId == user.companyId).first()
     if not p:
         raise HTTPException(status_code=404, detail="Product not found")
+
+    before = {"name": p.name, "sku": p.sku, "status": p.status, "unitPrice": p.unitPrice, "stockQuantity": p.stockQuantity}
 
     cat = db.query(Category).filter(Category.id == payload.categoryId, Category.companyId == user.companyId).first()
     if not cat:
@@ -186,7 +191,9 @@ def update_product(
     db.refresh(p)
     invalidate_forecast_cache(user.companyId)
     create_audit_log(db, company=company.name, user=user.email, action="Product Updated",
-                     entity_name=p.name, ip_address="Unknown", browser="Unknown")
+                     entity_name=p.name, resource_type="Product", resource_id=p.id,
+                     description=json.dumps({"before": before, "after": {"name": p.name, "sku": p.sku, "status": p.status, "unitPrice": p.unitPrice, "stockQuantity": p.stockQuantity}}),
+                     company_id=user.companyId, user_id=user.id, ip_address="Unknown", browser="Unknown")
     return _to_product_response(p)
 
 
@@ -204,7 +211,9 @@ def delete_product(product_id: int, db: DbDependency, authorization: str | None 
     db.commit()
     invalidate_forecast_cache(user.companyId)
     create_audit_log(db, company=company.name, user=user.email, action="Product Deleted",
-                     entity_name=product_name, ip_address="Unknown", browser="Unknown")
+                     entity_name=product_name, resource_type="Product", resource_id=product_id,
+                     description=json.dumps({"before": {"name": product_name}}),
+                     company_id=user.companyId, user_id=user.id, ip_address="Unknown", browser="Unknown")
     return {"message": "Product deleted"}
 
 
@@ -227,6 +236,7 @@ def update_product_status(
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
+    previous_status = product.status
     product.status = normalized
     product.updatedAt = datetime.now(timezone.utc)
     db.commit()
@@ -235,5 +245,7 @@ def update_product_status(
 
     action = "Product Activated" if normalized == "active" else "Product Deactivated"
     create_audit_log(db, company=company.name, user=user.email, action=action,
-                     entity_name=product.name, ip_address="Unknown", browser="Unknown")
+                     entity_name=product.name, resource_type="Product", resource_id=product.id,
+                     description=json.dumps({"before": {"status": previous_status}, "after": {"status": normalized}}),
+                     company_id=user.companyId, user_id=user.id, ip_address="Unknown", browser="Unknown")
     return _to_product_response(product)

@@ -69,6 +69,14 @@ class RefreshToken(Base):
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    userId = Column(Integer, index=True)
+    resourceType = Column(String)
+    resourceId = Column(String)
+    description = Column(String)
+    userAgent = Column(String)
+    createdAt = Column(DateTime, default=datetime.now(timezone.utc), index=True)
+    status = Column(String, default="success")
     company = Column(String)
     entityName = Column(String)
     invoiceNumber = Column(String, index=True)

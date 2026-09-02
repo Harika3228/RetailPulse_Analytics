@@ -1,4 +1,5 @@
 import math
+import json
 from collections import defaultdict
 from datetime import datetime, timezone
 
@@ -388,6 +389,11 @@ def create_stock_adjustment(
             action="Stock Adjusted",
             entity_name=product.name,
             product_name=product.name,
+            resource_type="Product",
+            resource_id=product.id,
+            description=json.dumps({"before": {"stockQuantity": current_stock}, "after": {"stockQuantity": new_stock}, "reason": normalized_reason}),
+            company_id=user.companyId,
+            user_id=user.id,
             ip_address="Unknown",
             browser="Unknown",
             commit=False,
@@ -444,6 +450,11 @@ def create_stock_adjustment(
         action=action_name,
         entity_name=product.name,
         product_name=product.name,
+        resource_type="Product",
+        resource_id=product.id,
+        description=json.dumps({"before": {"stockQuantity": current_stock}, "after": {"stockQuantity": new_stock}, "reason": normalized_reason}),
+        company_id=user.companyId,
+        user_id=user.id,
         ip_address="Unknown",
         browser="Unknown",
         commit=False,
@@ -472,6 +483,11 @@ def create_stock_adjustment(
         action="Create Stock Adjustment",
         entity_name=product.name,
         product_name=product.name,
+        resource_type="Product",
+        resource_id=product.id,
+        description=json.dumps({"adjustmentId": adjustment.id, "quantity": adjustment_quantity, "reason": normalized_reason}),
+        company_id=user.companyId,
+        user_id=user.id,
         ip_address="Unknown",
         browser="Unknown",
     )

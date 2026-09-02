@@ -11,6 +11,9 @@ from backend.controllers.dashboard_controller import (
     dashboard_sales_summary,
     dashboard_top_customers,
     dashboard_top_products,
+    get_audit_log,
+    export_audit_logs,
+    clear_audit_logs,
     get_notifications,
     list_audit_logs,
     list_company_users,
@@ -180,7 +183,65 @@ def list_company_users_route(
 @router.get("/audit-logs", response_model=list[AuditLogResponse])
 def list_audit_logs_route(
     db: DbDependency,
-    limit: int = 200,
+    limit: int = 50,
+    page: int | None = None,
+    offset: int = 0,
+    user: str | None = None,
+    action: str | None = None,
+    resourceType: str | None = None,
+    status: str | None = None,
+    dateFrom: str | None = None,
+    dateTo: str | None = None,
+    search: str | None = None,
+    sort: str = "desc",
     authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    return list_audit_logs(db, limit, authorization)
+    return list_audit_logs(
+        db,
+        limit=limit,
+        page=page,
+        offset=offset,
+        user_filter=user,
+        action=action,
+        resource_type=resourceType,
+        status=status,
+        date_from=dateFrom,
+        date_to=dateTo,
+        search=search,
+        sort_order=sort,
+        authorization=authorization,
+    )
+
+
+@router.get("/audit-logs/export")
+def export_audit_logs_route(
+    db: DbDependency,
+    format: str = "csv",
+    user: str | None = None,
+    action: str | None = None,
+    resourceType: str | None = None,
+    status: str | None = None,
+    dateFrom: str | None = None,
+    dateTo: str | None = None,
+    search: str | None = None,
+    sort: str = "desc",
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    return export_audit_logs(db, format, user, action, resourceType, status, dateFrom, dateTo, search, sort, authorization)
+
+
+@router.delete("/audit-logs")
+def clear_audit_logs_route(
+    db: DbDependency,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    return clear_audit_logs(db, authorization)
+
+
+@router.get("/audit-logs/{audit_log_id}", response_model=AuditLogResponse)
+def get_audit_log_route(
+    audit_log_id: int,
+    db: DbDependency,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    return get_audit_log(audit_log_id, db, authorization)

@@ -102,6 +102,8 @@ export const queryKeys = {
   },
   auditLogs: {
     all: ['audit-logs'] as const,
+    list: (params: string) => ['audit-logs', 'list', params] as const,
+    detail: (id: number | string) => ['audit-logs', 'detail', String(id)] as const,
   },
   imports: {
     all: ['imports'] as const,

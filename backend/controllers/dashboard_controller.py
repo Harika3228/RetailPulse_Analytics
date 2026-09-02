@@ -1,7 +1,8 @@
 import csv
 import io
+from datetime import datetime, time, timezone
 
-from sqlalchemy import desc
+from sqlalchemy import and_, desc, or_
 
 from fastapi import HTTPException
 from fastapi.responses import Response
@@ -299,7 +300,21 @@ def list_company_users(company_id: int, db: DbDependency, authorization: str | N
     return [{"id": u.id, "email": u.email, "name": u.name, "role": u.role, "status": u.status} for u in users]
 
 
-def list_audit_logs(db: DbDependency, limit: int = 200, authorization: str | None = None) -> list[AuditLogResponse]:
+def list_audit_logs(
+    db: DbDependency,
+    limit: int = 50,
+    page: int | None = None,
+    offset: int = 0,
+    user_filter: str | None = None,
+    action: str | None = None,
+    resource_type: str | None = None,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    search: str | None = None,
+    sort_order: str = "desc",
+    authorization: str | None = None,
+) -> list[AuditLogResponse]:
     if authorization is None or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing token")
     token = authorization.split(" ", 1)[1]
@@ -307,15 +322,57 @@ def list_audit_logs(db: DbDependency, limit: int = 200, authorization: str | Non
     _ensure_admin(user)
     company = get_company_for_user(db, user)
 
-    sanitized_limit = max(1, min(limit, 1000))
+    sanitized_limit = max(1, min(limit, 100))
+    sanitized_offset = max(0, offset) if page is None else (max(1, page) - 1) * sanitized_limit
+    if sort_order.lower() not in {"asc", "desc"}:
+        raise HTTPException(status_code=400, detail="sort must be 'asc' or 'desc'")
     company_keys = [str(user.companyId)]
     if company and company.name:
         company_keys.append(company.name)
 
     logs = (
         db.query(AuditLog)
-        .filter(AuditLog.company.in_(company_keys))
-        .order_by(desc(AuditLog.timestamp), desc(AuditLog.id))
+        .outerjoin(User, AuditLog.userId == User.id)
+        .filter(or_(
+            AuditLog.companyId == user.companyId,
+            and_(AuditLog.companyId.is_(None), AuditLog.company.in_(company_keys)),
+        ))
+    )
+    if user_filter:
+        user_pattern = f"%{user_filter.strip()}%"
+        logs = logs.filter(or_(AuditLog.user.ilike(user_pattern), User.name.ilike(user_pattern), User.email.ilike(user_pattern)))
+    if action:
+        logs = logs.filter(AuditLog.action.ilike(f"%{action.strip()}%"))
+    if resource_type:
+        logs = logs.filter(AuditLog.resourceType.ilike(f"%{resource_type.strip()}%"))
+    if status:
+        logs = logs.filter(AuditLog.status.ilike(status.strip()))
+    if search:
+        search_pattern = f"%{search.strip()}%"
+        logs = logs.filter(or_(
+            AuditLog.user.ilike(search_pattern),
+            User.name.ilike(search_pattern),
+            User.email.ilike(search_pattern),
+            AuditLog.action.ilike(search_pattern),
+            AuditLog.resourceType.ilike(search_pattern),
+            AuditLog.resourceId.ilike(search_pattern),
+            AuditLog.description.ilike(search_pattern),
+        ))
+    if date_from:
+        try:
+            logs = logs.filter(AuditLog.createdAt >= datetime.combine(datetime.fromisoformat(date_from).date(), time.min, tzinfo=timezone.utc))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="dateFrom must be an ISO date")
+    if date_to:
+        try:
+            logs = logs.filter(AuditLog.createdAt < datetime.combine(datetime.fromisoformat(date_to).date(), time.max, tzinfo=timezone.utc))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="dateTo must be an ISO date")
+
+    order = desc if sort_order.lower() == "desc" else lambda column: column.asc()
+    logs = (
+        logs.order_by(order(AuditLog.createdAt), order(AuditLog.timestamp), order(AuditLog.id))
+        .offset(sanitized_offset)
         .limit(sanitized_limit)
         .all()
     )
@@ -325,6 +382,15 @@ def list_audit_logs(db: DbDependency, limit: int = 200, authorization: str | Non
         response.append(
             AuditLogResponse(
                 id=item.id,
+                companyId=item.companyId,
+                userId=item.userId,
+                resourceType=item.resourceType or item.entityName,
+                resourceId=item.resourceId,
+                description=item.description or item.action or "",
+                ipAddress=item.ipAddress or "Unknown",
+                userAgent=item.userAgent or item.browser or "Unknown",
+                createdAt=item.createdAt.isoformat() if item.createdAt else (item.timestamp.isoformat() if item.timestamp else ""),
+                status=item.status or "success",
                 company=item.company or (company.name if company else ""),
                 entity=item.entityName,
                 invoiceNumber=item.invoiceNumber,
@@ -335,3 +401,99 @@ def list_audit_logs(db: DbDependency, limit: int = 200, authorization: str | Non
             )
         )
     return response
+
+
+def get_audit_log(audit_log_id: int, db: DbDependency, authorization: str | None = None) -> AuditLogResponse:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    token = authorization.split(" ", 1)[1]
+    user = get_current_user(db, token)
+    _ensure_admin(user)
+    company = get_company_for_user(db, user)
+    company_keys = [str(user.companyId)]
+    if company and company.name:
+        company_keys.append(company.name)
+    item = (
+        db.query(AuditLog)
+        .filter(
+            AuditLog.id == audit_log_id,
+            or_(
+                AuditLog.companyId == user.companyId,
+                and_(AuditLog.companyId.is_(None), AuditLog.company.in_(company_keys)),
+            ),
+        )
+        .first()
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Audit log not found")
+    formatted_time = item.timestamp.strftime("%d %b %Y %H:%M") if item.timestamp else ""
+    return AuditLogResponse(
+        id=item.id,
+        companyId=item.companyId,
+        userId=item.userId,
+        resourceType=item.resourceType or item.entityName,
+        resourceId=item.resourceId,
+        description=item.description or item.action or "",
+        ipAddress=item.ipAddress or "Unknown",
+        userAgent=item.userAgent or item.browser or "Unknown",
+        createdAt=item.createdAt.isoformat() if item.createdAt else (item.timestamp.isoformat() if item.timestamp else ""),
+        status=item.status or "success",
+        company=item.company or (company.name if company else ""),
+        entity=item.entityName,
+        invoiceNumber=item.invoiceNumber,
+        productName=item.productName,
+        action=item.action or "",
+        performedBy=item.user or "",
+        time=formatted_time,
+    )
+
+
+def export_audit_logs(
+    db: DbDependency,
+    export_format: str = "csv",
+    user_filter: str | None = None,
+    action: str | None = None,
+    resource_type: str | None = None,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    search: str | None = None,
+    sort_order: str = "desc",
+    authorization: str | None = None,
+) -> Response:
+    if export_format.lower() not in {"csv", "pdf"}:
+        raise HTTPException(status_code=400, detail="format must be 'csv' or 'pdf'")
+    records = list_audit_logs(
+        db, limit=10000, user_filter=user_filter, action=action,
+        resource_type=resource_type, status=status, date_from=date_from,
+        date_to=date_to, search=search, sort_order=sort_order,
+        authorization=authorization,
+    )
+    headers = ["user", "action", "resource", "resource_id", "description", "ip_address", "user_agent", "timestamp", "status"]
+    rows = [[item.performedBy, item.action, item.resourceType or "", item.resourceId or "", item.description, item.ipAddress, item.userAgent, item.createdAt, item.status] for item in records]
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(headers)
+    writer.writerows(rows)
+    if export_format.lower() == "csv":
+        return Response(buffer.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=audit-logs.csv"})
+    pdf_lines = ["%PDF-1.4", "% Audit Logs", "", " | ".join(headers)]
+    pdf_lines.extend(" | ".join(str(value).replace("\n", " ") for value in row) for row in rows)
+    pdf_lines.append("%%EOF")
+    return Response("\n".join(pdf_lines).encode("utf-8"), media_type="application/pdf", headers={"Content-Disposition": "attachment; filename=audit-logs.pdf"})
+
+
+def clear_audit_logs(db: DbDependency, authorization: str | None = None) -> dict[str, int | str]:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    token = authorization.split(" ", 1)[1]
+    user = get_current_user(db, token)
+    _ensure_admin(user)
+    deleted_count = db.query(AuditLog).filter(AuditLog.companyId == user.companyId).delete(synchronize_session=False)
+    db.commit()
+    create_audit_log(
+        db, company=str(user.companyId), user=user.email, action="Audit Logs Cleared",
+        entity_name="audit_logs", description=f"Cleared {deleted_count} audit log records.",
+        company_id=user.companyId, user_id=user.id, ip_address="Unknown", browser="Unknown",
+    )
+    return {"message": "Audit logs cleared", "deletedCount": deleted_count}

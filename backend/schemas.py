@@ -136,6 +136,15 @@ class AnalyticsDashboardResponse(BaseModel):
 
 class AuditLogResponse(BaseModel):
     id: int
+    companyId: int | None = None
+    userId: int | None = None
+    resourceType: str | None = None
+    resourceId: str | None = None
+    description: str
+    ipAddress: str
+    userAgent: str
+    createdAt: str
+    status: str
     company: str
     entity: str | None = None
     invoiceNumber: str | None = None

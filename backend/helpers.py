@@ -6,7 +6,7 @@ from sqlalchemy import and_, case, desc, func
 
 from backend.database import engine
 from backend.models import (
-    AuditLog, Category, Customer, Notification, Product, SalesTransaction,
+    AuditLog, Category, Company, Customer, Notification, Product, SalesTransaction,
     SalesTransactionLine, StockMovement, User,
 )
 from backend.schemas import (
@@ -41,9 +41,31 @@ def create_audit_log(
     forecast_period: str | None = None,
     ip_address: str | None = None,
     browser: str | None = None,
+    company_id: int | None = None,
+    user_id: int | None = None,
+    resource_type: str | None = None,
+    resource_id: str | int | None = None,
+    description: str | None = None,
+    status: str = "success",
     commit: bool = True,
 ) -> None:
+    resolved_company_id = company_id
+    if resolved_company_id is None:
+        resolved_company_id = int(company) if company.isdigit() else (
+            db.query(Company.id).filter(Company.name == company).scalar()
+        )
+    resolved_user_id = user_id
+    if resolved_user_id is None:
+        resolved_user_id = db.query(User.id).filter(User.email == user).scalar()
     entry = AuditLog(
+        companyId=resolved_company_id,
+        userId=resolved_user_id,
+        resourceType=resource_type or entity_name,
+        resourceId=str(resource_id) if resource_id is not None else None,
+        description=description or action,
+        userAgent=browser or "Unknown",
+        createdAt=datetime.now(timezone.utc),
+        status=status,
         company=company,
         entityName=entity_name,
         invoiceNumber=invoice_number,
