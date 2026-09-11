@@ -241,6 +241,37 @@ def list_inventory(
                 product.name,
                 f"{product.name} is predicted to run out of stock.",
                 "forecast_out_of_stock",
+                target_role="admin",
+                priority="critical",
+                resource_type="Product",
+                resource_id=product.id,
+                alert_key=f"inventory:{user.companyId}:{product.id}:stockout",
+            )
+        elif current_stock <= reorder_level:
+            notif_collector.add(
+                user.companyId,
+                product.id,
+                product.name,
+                f"{product.name} is at or below its reorder point ({reorder_level}).",
+                "low_stock",
+                target_role="admin",
+                priority="medium",
+                resource_type="Product",
+                resource_id=product.id,
+                alert_key=f"inventory:{user.companyId}:{product.id}:low_stock",
+            )
+        elif product.maxStockLevel is not None and current_stock > product.maxStockLevel:
+            notif_collector.add(
+                user.companyId,
+                product.id,
+                product.name,
+                f"{product.name} exceeds its maximum stock level ({product.maxStockLevel}).",
+                "overstock",
+                target_role="admin",
+                priority="medium",
+                resource_type="Product",
+                resource_id=product.id,
+                alert_key=f"inventory:{user.companyId}:{product.id}:overstock",
             )
         elif predicted_demand > current_stock:
             notif_collector.add(
@@ -249,6 +280,11 @@ def list_inventory(
                 product.name,
                 f"{product.name} forecasted demand exceeds available inventory.",
                 "forecast_demand_exceeds_inventory",
+                target_role="admin",
+                priority="high",
+                resource_type="Product",
+                resource_id=product.id,
+                alert_key=f"inventory:{user.companyId}:{product.id}:forecast_risk",
             )
         elif predicted_demand > latest_history_value * 1.1:
             notif_collector.add(
@@ -257,6 +293,10 @@ def list_inventory(
                 product.name,
                 f"{product.name} shows significant demand growth.",
                 "demand_growth_alert",
+                target_role="admin",
+                resource_type="Product",
+                resource_id=product.id,
+                alert_key=f"inventory:{user.companyId}:{product.id}:sales_growth",
             )
 
         audit_collector.add(
@@ -321,6 +361,7 @@ def list_inventory(
         browser="Unknown",
         deduplicate_key="list_inventory",
     )
+    notif_collector.resolve_missing_inventory_alerts(user.companyId)
     audit_collector.flush()
     notif_collector.flush()
     db.commit()
@@ -381,6 +422,10 @@ def create_stock_adjustment(
             product.name,
             f"{product.name} stock was manually adjusted ({adjustment_quantity} units).",
             "manual_adjustment",
+            target_role="admin",
+            resource_type="Product",
+            resource_id=product.id,
+            alert_key=f"inventory:{user.companyId}:{product.id}:manual_adjustment",
         )
         create_audit_log(
             db,
@@ -407,6 +452,11 @@ def create_stock_adjustment(
             product.name,
             f"{product.name} is out of stock.",
             "out_of_stock",
+            target_role="admin",
+            priority="critical",
+            resource_type="Product",
+            resource_id=product.id,
+            alert_key=f"inventory:{user.companyId}:{product.id}:stockout",
         )
         create_audit_log(
             db,
@@ -428,6 +478,11 @@ def create_stock_adjustment(
             product.name,
             f"{product.name} stock is low ({new_stock} remaining).",
             "low_stock",
+            target_role="admin",
+            priority="medium",
+            resource_type="Product",
+            resource_id=product.id,
+            alert_key=f"inventory:{user.companyId}:{product.id}:low_stock",
         )
         create_audit_log(
             db,

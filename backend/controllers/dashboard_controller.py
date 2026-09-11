@@ -9,8 +9,8 @@ from fastapi.responses import Response
 
 from backend.auth_utils import get_company_for_user, get_current_user
 from backend.database import DbDependency
-from backend.helpers import _ensure_admin, _get_company_analytics_summary, _get_company_inventory_summary, _get_company_product_summary, _get_company_sales_summary, _get_company_top_customers, _get_company_top_products, create_audit_log, list_company_notifications
-from backend.models import AuditLog, SalesTransaction, User
+from backend.helpers import _ensure_admin, _get_company_analytics_summary, _get_company_inventory_summary, _get_company_product_summary, _get_company_sales_summary, _get_company_top_customers, _get_company_top_products, count_unread_notifications, create_audit_log, list_company_notifications
+from backend.models import AuditLog, Notification, SalesTransaction, User
 from backend.schemas import AnalyticsDashboardResponse, AuditLogResponse, DashboardResponse, InventoryDashboardSummaryResponse, NotificationResponse, ProductSummaryResponse, SalesDashboardSummaryResponse, TopCustomerResponse, TopProductResponse
 
 
@@ -279,12 +279,90 @@ def dashboard_export(
     return Response(buffer.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=dashboard-report.csv"})
 
 
-def get_notifications(db: DbDependency, limit: int = 20, authorization: str | None = None) -> list[NotificationResponse]:
+def get_notifications(db: DbDependency, limit: int = 20, page: int = 1, unread: str | None = None, notification_type: str | None = None, priority: str | None = None, authorization: str | None = None) -> list[NotificationResponse]:
     if authorization is None or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing token")
     token = authorization.split(" ", 1)[1]
     user = get_current_user(db, token)
-    return list_company_notifications(db, user.companyId, limit)
+    unread_filter = True if unread == "true" else False if unread == "false" else None
+    return list_company_notifications(db, user.companyId, user.role, user.id, limit, max(0, page - 1) * limit, unread_filter, notification_type, priority)
+
+
+def get_unread_notification_count(db: DbDependency, authorization: str | None = None) -> dict[str, int]:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = get_current_user(db, authorization.split(" ", 1)[1])
+    return {"count": count_unread_notifications(db, user.companyId, user.role, user.id)}
+
+
+def mark_notification_read(notification_id: int, db: DbDependency, authorization: str | None = None) -> dict[str, bool]:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = get_current_user(db, authorization.split(" ", 1)[1])
+    notification = db.query(Notification).filter(
+        Notification.id == notification_id,
+        Notification.companyId == user.companyId,
+        or_(Notification.userId.is_(None), Notification.userId == user.id),
+        or_(
+            Notification.targetRole.is_(None),
+            Notification.targetRole == user.role,
+            and_(Notification.targetRole == "admin", user.role in {"admin", "company_admin", "super_admin"}),
+        ),
+    ).first()
+    if not notification:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    notification.isRead = 1
+    notification.readAt = datetime.now(timezone.utc)
+    db.commit()
+    create_audit_log(
+        db,
+        company=str(user.companyId),
+        user=user.email,
+        action="Notification Marked Read",
+        entity_name=notification.title or notification.type,
+        resource_type="Notification",
+        resource_id=notification.id,
+        company_id=user.companyId,
+        user_id=user.id,
+        ip_address="Unknown",
+        browser="Unknown",
+    )
+    return {"success": True}
+
+
+def mark_all_notifications_read(db: DbDependency, authorization: str | None = None) -> dict[str, int]:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = get_current_user(db, authorization.split(" ", 1)[1])
+    notifications = db.query(Notification).filter(
+        Notification.companyId == user.companyId,
+        Notification.isRead == 0,
+        or_(Notification.userId.is_(None), Notification.userId == user.id),
+        or_(
+            Notification.targetRole.is_(None),
+            Notification.targetRole == user.role,
+            and_(Notification.targetRole == "admin", user.role in {"admin", "company_admin", "super_admin"}),
+        ),
+    ).all()
+    now = datetime.now(timezone.utc)
+    for notification in notifications:
+        notification.isRead = 1
+        notification.readAt = now
+    db.commit()
+    if notifications:
+        create_audit_log(
+            db,
+            company=str(user.companyId),
+            user=user.email,
+            action="All Notifications Marked Read",
+            entity_name="notifications",
+            description=f"Marked {len(notifications)} notifications as read.",
+            company_id=user.companyId,
+            user_id=user.id,
+            ip_address="Unknown",
+            browser="Unknown",
+        )
+    return {"updated": len(notifications)}
 
 
 def list_company_users(company_id: int, db: DbDependency, authorization: str | None = None) -> list[dict]:

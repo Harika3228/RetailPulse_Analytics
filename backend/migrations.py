@@ -94,6 +94,7 @@ def ensure_schema() -> None:
     user_columns = {col["name"] for col in inspector.get_columns("users")}
     refresh_columns = {col["name"] for col in inspector.get_columns("refresh_tokens")}
     audit_columns = {col["name"] for col in inspector.get_columns("audit_logs")}
+    notification_columns = {col["name"] for col in inspector.get_columns("notifications")}
     category_columns = {col["name"] for col in inspector.get_columns("categories")}
     product_columns = {col["name"] for col in inspector.get_columns("products")}
     customer_columns = {col["name"] for col in inspector.get_columns("customers")}
@@ -180,6 +181,28 @@ def ensure_schema() -> None:
             connection.execute(text("ALTER TABLE audit_logs ADD COLUMN browser VARCHAR"))
         if "timestamp" not in audit_columns:
             connection.execute(text("ALTER TABLE audit_logs ADD COLUMN timestamp DATETIME"))
+
+        # notifications
+        if "targetRole" not in notification_columns:
+            connection.execute(text("ALTER TABLE notifications ADD COLUMN targetRole VARCHAR"))
+        if "severity" not in notification_columns:
+            connection.execute(text("ALTER TABLE notifications ADD COLUMN severity VARCHAR DEFAULT 'info'"))
+        if "title" not in notification_columns:
+            connection.execute(text("ALTER TABLE notifications ADD COLUMN title VARCHAR"))
+        if "resourceType" not in notification_columns:
+            connection.execute(text("ALTER TABLE notifications ADD COLUMN resourceType VARCHAR"))
+        if "resourceId" not in notification_columns:
+            connection.execute(text("ALTER TABLE notifications ADD COLUMN resourceId VARCHAR"))
+        if "priority" not in notification_columns:
+            connection.execute(text("ALTER TABLE notifications ADD COLUMN priority VARCHAR DEFAULT 'low'"))
+        if "userId" not in notification_columns:
+            connection.execute(text("ALTER TABLE notifications ADD COLUMN userId INTEGER"))
+        if "readAt" not in notification_columns:
+            connection.execute(text("ALTER TABLE notifications ADD COLUMN readAt DATETIME"))
+        if "alertKey" not in notification_columns:
+            connection.execute(text("ALTER TABLE notifications ADD COLUMN alertKey VARCHAR"))
+        if "resolvedAt" not in notification_columns:
+            connection.execute(text("ALTER TABLE notifications ADD COLUMN resolvedAt DATETIME"))
 
         # categories
         if "companyId" not in category_columns:

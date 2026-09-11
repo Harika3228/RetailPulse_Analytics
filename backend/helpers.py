@@ -2,7 +2,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
-from sqlalchemy import and_, case, desc, func
+from sqlalchemy import and_, case, desc, func, or_
 
 from backend.database import engine
 from backend.models import (
@@ -83,14 +83,53 @@ def create_audit_log(
         db.commit()
 
 
-def create_notification(db, company_id: int, product_id: int | None = None, product_name: str | None = None, message: str = "", notification_type: str = "info") -> None:
+def create_notification(
+    db,
+    company_id: int,
+    product_id: int | None = None,
+    product_name: str | None = None,
+    message: str = "",
+    notification_type: str = "info",
+    target_role: str | None = None,
+    severity: str = "info",
+    title: str | None = None,
+    priority: str | None = None,
+    resource_type: str | None = None,
+    resource_id: int | str | None = None,
+    user_id: int | None = None,
+    alert_key: str | None = None,
+) -> None:
+    resolved_priority = priority or {
+        "out_of_stock": "critical",
+        "forecast_out_of_stock": "critical",
+        "import_failed": "critical",
+        "forecast_demand_exceeds_inventory": "high",
+        "low_stock": "medium",
+        "overstock": "medium",
+        "import_completed_with_errors": "high",
+    }.get(notification_type, {"error": "critical", "warning": "high", "success": "low"}.get(severity, "low"))
+    resolved_title = title or {
+        "low_stock": "Low Stock",
+        "out_of_stock": "Stockout Risk",
+        "forecast_out_of_stock": "Stockout Risk",
+        "forecast_demand_exceeds_inventory": "Stockout Risk",
+        "demand_growth_alert": "Sales Alert",
+        "sale_created": "Sales Alert",
+        "import_completed": "Import Completed",
+        "import_completed_with_errors": "Import Completed With Errors",
+        "import_failed": "Import Failed",
+    }.get(notification_type, "System Alert")
     existing = (
         db.query(Notification)
         .filter(
             Notification.companyId == company_id,
             Notification.message == message,
             Notification.type == notification_type,
-            Notification.isRead == 0,
+            Notification.targetRole == target_role,
+            Notification.userId == user_id,
+            Notification.resolvedAt.is_(None) if alert_key else True,
+            Notification.alertKey == alert_key if alert_key else True,
+            Notification.isRead == 0 if not alert_key else True,
         )
         .first()
     )
@@ -99,10 +138,18 @@ def create_notification(db, company_id: int, product_id: int | None = None, prod
     db.add(
         Notification(
             companyId=company_id,
+            userId=user_id,
             productId=product_id or 0,
             productName=product_name or "",
             message=message,
             type=notification_type,
+            targetRole=target_role,
+            severity=severity,
+            title=resolved_title,
+            resourceType=resource_type or ("Product" if product_id else None),
+            resourceId=str(resource_id if resource_id is not None else product_id) if (resource_id is not None or product_id) else None,
+            priority=resolved_priority,
+            alertKey=alert_key,
             isRead=0,
         )
     )
@@ -167,6 +214,17 @@ class NotificationCollector:
         self._db = db
         self._entries: list[Notification] = []
         self._seen_messages: set[str] = set()
+        self._active_alert_keys: set[str] = set()
+
+    @staticmethod
+    def _title(notification_type: str) -> str:
+        return {
+            "low_stock": "Low Stock",
+            "out_of_stock": "Stockout Risk",
+            "forecast_out_of_stock": "Stockout Risk",
+            "forecast_demand_exceeds_inventory": "Stockout Risk",
+            "demand_growth_alert": "Sales Alert",
+        }.get(notification_type, "System Alert")
 
     def add(
         self,
@@ -175,18 +233,44 @@ class NotificationCollector:
         product_name: str | None = None,
         message: str = "",
         notification_type: str = "info",
+        target_role: str | None = None,
+        severity: str = "info",
+        title: str | None = None,
+        priority: str | None = None,
+        resource_type: str | None = None,
+        resource_id: int | str | None = None,
+        user_id: int | None = None,
+        alert_key: str | None = None,
     ) -> None:
-        dedup_key = f"{company_id}:{message}:{notification_type}"
+        dedup_key = alert_key or f"{company_id}:{message}:{notification_type}"
+        if alert_key:
+            self._active_alert_keys.add(alert_key)
         if dedup_key in self._seen_messages:
+            return
+        if alert_key and self._db.query(Notification.id).filter(Notification.alertKey == alert_key, Notification.resolvedAt.is_(None)).first():
             return
         self._seen_messages.add(dedup_key)
         self._entries.append(
             Notification(
                 companyId=company_id,
+                userId=user_id,
                 productId=product_id or 0,
                 productName=product_name or "",
                 message=message,
                 type=notification_type,
+                targetRole=target_role,
+                severity=severity,
+                title=title or self._title(notification_type),
+                resourceType=resource_type or ("Product" if product_id else None),
+                resourceId=str(resource_id if resource_id is not None else product_id) if (resource_id is not None or product_id) else None,
+                priority=priority or {
+                    "out_of_stock": "critical",
+                    "forecast_out_of_stock": "critical",
+                    "forecast_demand_exceeds_inventory": "high",
+                    "low_stock": "medium",
+                    "overstock": "medium",
+                }.get(notification_type, {"error": "critical", "warning": "high", "success": "low"}.get(severity, "low")),
+                alertKey=alert_key,
                 isRead=0,
             )
         )
@@ -196,26 +280,79 @@ class NotificationCollector:
             self._db.add_all(self._entries)
             self._entries.clear()
 
+    def resolve_missing_inventory_alerts(self, company_id: int) -> None:
+        active_keys = list(self._active_alert_keys)
+        query = self._db.query(Notification).filter(
+            Notification.companyId == company_id,
+            Notification.alertKey.like(f"inventory:{company_id}:%"),
+            Notification.resolvedAt.is_(None),
+        )
+        if active_keys:
+            query = query.filter(~Notification.alertKey.in_(active_keys))
+        query.update({Notification.resolvedAt: datetime.now(timezone.utc)}, synchronize_session=False)
 
-def list_company_notifications(db, company_id: int, limit: int = 20) -> list[NotificationResponse]:
-    items = (
-        db.query(Notification)
-        .filter(Notification.companyId == company_id)
-        .order_by(Notification.createdAt.desc(), Notification.id.desc())
-        .limit(max(1, min(limit, 100)))
-        .all()
+
+def list_company_notifications(
+    db,
+    company_id: int,
+    user_role: str | None = None,
+    user_id: int | None = None,
+    limit: int = 20,
+    offset: int = 0,
+    unread: bool | None = None,
+    notification_type: str | None = None,
+    priority: str | None = None,
+) -> list[NotificationResponse]:
+    query = db.query(Notification).filter(
+        Notification.companyId == company_id,
+        Notification.resolvedAt.is_(None),
+        or_(Notification.userId.is_(None), Notification.userId == user_id),
+        or_(
+            Notification.targetRole.is_(None),
+            Notification.targetRole == user_role,
+            and_(Notification.targetRole == "admin", user_role in {"admin", "company_admin", "super_admin"}),
+        ),
     )
+    if unread is not None:
+        query = query.filter(Notification.isRead == (0 if unread else 1))
+    if notification_type:
+        query = query.filter(Notification.type == notification_type)
+    if priority:
+        query = query.filter(Notification.priority == priority)
+    items = query.order_by(Notification.createdAt.desc(), Notification.id.desc()).offset(max(0, offset)).limit(max(1, min(limit, 100))).all()
     return [
         NotificationResponse(
             id=item.id,
+            title=item.title or (item.productName or "System Alert"),
             productId=item.productId or 0,
             productName=item.productName or "",
             message=item.message or "",
             type=item.type or "info",
+            severity=item.severity or "info",
+            priority=item.priority or "low",
+            resourceType=item.resourceType,
+            resourceId=item.resourceId,
+            isRead=bool(item.isRead),
+            readAt=_datetime_to_iso(item.readAt),
+            targetRole=item.targetRole,
             createdAt=_datetime_to_iso(item.createdAt) or "",
         )
         for item in items
     ]
+
+
+def count_unread_notifications(db, company_id: int, user_role: str | None, user_id: int | None) -> int:
+    return db.query(Notification).filter(
+        Notification.companyId == company_id,
+        Notification.resolvedAt.is_(None),
+        Notification.isRead == 0,
+        or_(Notification.userId.is_(None), Notification.userId == user_id),
+        or_(
+            Notification.targetRole.is_(None),
+            Notification.targetRole == user_role,
+            and_(Notification.targetRole == "admin", user_role in {"admin", "company_admin", "super_admin"}),
+        ),
+    ).count()
 
 
 # ---------------------------------------------------------------------------

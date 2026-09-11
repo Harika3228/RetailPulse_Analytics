@@ -191,10 +191,18 @@ class SalesAnalyticsPaymentMethodResponse(BaseModel):
 
 class NotificationResponse(BaseModel):
     id: int
+    title: str
     productId: int
     productName: str
     message: str
     type: str
+    severity: str = "info"
+    priority: str = "low"
+    resourceType: str | None = None
+    resourceId: str | None = None
+    isRead: bool = False
+    readAt: str | None = None
+    targetRole: str | None = None
     createdAt: str
 
 

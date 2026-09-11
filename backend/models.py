@@ -126,11 +126,21 @@ class Notification(Base):
     __tablename__ = "notifications"
     id = Column(Integer, primary_key=True, index=True)
     companyId = Column(Integer, index=True)
+    userId = Column(Integer, index=True)
     productId = Column(Integer, index=True)
     productName = Column(String)
+    title = Column(String)
     message = Column(String)
     type = Column(String, index=True)
+    resourceType = Column(String)
+    resourceId = Column(String)
+    targetRole = Column(String, index=True)
+    severity = Column(String, default="info")
+    priority = Column(String, default="low", index=True)
+    alertKey = Column(String, index=True)
+    resolvedAt = Column(DateTime)
     isRead = Column(Integer, default=0)
+    readAt = Column(DateTime)
     createdAt = Column(DateTime, default=datetime.now(timezone.utc))
 
 

@@ -15,6 +15,9 @@ from backend.controllers.dashboard_controller import (
     export_audit_logs,
     clear_audit_logs,
     get_notifications,
+    get_unread_notification_count,
+    mark_all_notifications_read,
+    mark_notification_read,
     list_audit_logs,
     list_company_users,
 )
@@ -166,9 +169,38 @@ def dashboard_export_route(
 def get_notifications_route(
     db: DbDependency,
     limit: int = 20,
+    page: int = 1,
+    unread: str | None = None,
+    type: str | None = None,
+    priority: str | None = None,
     authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    return get_notifications(db, limit, authorization)
+    return get_notifications(db, limit, page, unread, type, priority, authorization)
+
+
+@router.get("/notifications/unread-count")
+def get_unread_notification_count_route(
+    db: DbDependency,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    return get_unread_notification_count(db, authorization)
+
+
+@router.patch("/notifications/{notification_id}/read")
+def mark_notification_read_route(
+    notification_id: int,
+    db: DbDependency,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    return mark_notification_read(notification_id, db, authorization)
+
+
+@router.patch("/notifications/read-all")
+def mark_all_notifications_read_route(
+    db: DbDependency,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    return mark_all_notifications_read(db, authorization)
 
 
 @router.get("/companies/{company_id}/users")

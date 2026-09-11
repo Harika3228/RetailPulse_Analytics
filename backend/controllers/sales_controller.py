@@ -15,6 +15,7 @@ from backend.helpers import (
     _sales_transaction_delta_map,
     _transaction_response,
     create_audit_log,
+    create_notification,
 )
 from backend.models import Category, Customer, Product, SalesTransaction, SalesTransactionLine, StockMovement
 from backend.schemas import (
@@ -272,6 +273,15 @@ def create_sales_transaction(payload: SalesTransactionRequest, db: DbDependency,
                      action="Sale Created", entity_name=tx.invoiceNumber, invoice_number=tx.invoiceNumber,
                      product_name=line_payloads[0]["product"].name if line_payloads else None,
                      ip_address="Unknown", browser="Unknown")
+    create_notification(
+        db,
+        user.companyId,
+        message=f"Sale {tx.invoiceNumber or tx.id} was recorded.",
+        notification_type="sale_created",
+        severity="info",
+        target_role="admin",
+    )
+    db.commit()
     return _transaction_response(db, tx)
 
 

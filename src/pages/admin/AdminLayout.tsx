@@ -48,8 +48,8 @@ export default function AdminLayout({ children }) {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const notificationsQuery = useApiQuery<Array<Record<string, any>>>(queryKeys.notifications.all, '/notifications', token);
-  const notificationCount = notificationsQuery.data?.length ?? 0;
+  const notificationsQuery = useApiQuery<{ count: number }>(queryKeys.notifications.unreadCount, '/notifications/unread-count', token, { refetchInterval: 10000 });
+  const notificationCount = notificationsQuery.data?.count ?? 0;
 
   const isAdmin = ['admin', 'company_admin', 'super_admin'].includes(normalizeRole(user?.role));
   const activeSection = getSectionFromPath(location.pathname);

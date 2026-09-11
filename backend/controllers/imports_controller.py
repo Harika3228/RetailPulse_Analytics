@@ -22,6 +22,7 @@ from backend.helpers import (
     _next_company_invoice_number,
     _parse_sale_datetime,
     create_audit_log,
+    create_notification,
 )
 from backend.models import (
     Category,
@@ -1161,6 +1162,11 @@ def confirm_import(batch_id: int, db: DbDependency, authorization: str | None = 
         batch.status = "failed"
         batch.completedAt = datetime.now(timezone.utc)
         db.commit()
+        create_notification(
+            db, user.companyId, message=f"Import failed for {batch.fileName}.",
+            notification_type="import_failed", severity="error", target_role="admin",
+        )
+        db.commit()
         raise
 
     batch.status = "completed_with_errors" if failed > 0 else "completed"
@@ -1183,6 +1189,15 @@ def confirm_import(batch_id: int, db: DbDependency, authorization: str | None = 
         ip_address="Unknown",
         browser="Unknown",
     )
+    create_notification(
+        db,
+        user.companyId,
+        message=f"Import completed for {batch.fileName}: {inserted} rows imported, {failed} failed.",
+        notification_type="import_completed" if failed == 0 else "import_completed_with_errors",
+        severity="warning" if failed else "success",
+        target_role="admin",
+    )
+    db.commit()
 
     skipped = batch.invalidCount + batch.duplicateCount
     return ImportConfirmResponse(
