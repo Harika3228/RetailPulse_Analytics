@@ -98,6 +98,7 @@ def list_inventory(
     forecast_period: str | None = None,
     offset: int = 0,
     limit: int = 50,
+    category: str | None = None,
 ) -> list[InventoryResponse]:
     token = _extract_token(authorization)
     user = get_current_user(db, token)
@@ -124,6 +125,9 @@ def list_inventory(
         query = query.filter(Product.name.ilike(wildcard) | Product.sku.ilike(wildcard))
     if categoryId:
         query = query.filter(Product.categoryId == categoryId)
+    if category:
+        category_ids = [item.id for item in db.query(Category.id).filter(Category.companyId == user.companyId, Category.name.ilike(f"%{category.strip()}%" )).all()]
+        query = query.filter(Product.categoryId.in_(category_ids)) if category_ids else query.filter(Product.id == -1)
     if brand:
         query = query.filter(Product.brand.ilike(f"%{brand}%"))
     if status_filter:

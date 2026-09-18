@@ -20,6 +20,14 @@ from backend.controllers.dashboard_controller import (
     mark_notification_read,
     list_audit_logs,
     list_company_users,
+    stock_movement_report,
+    list_scheduled_reports,
+    create_scheduled_report,
+    update_scheduled_report,
+    set_scheduled_report_status,
+    delete_scheduled_report,
+    list_report_history,
+    create_report_history,
 )
 from backend.database import DbDependency
 from backend.schemas import (
@@ -32,6 +40,10 @@ from backend.schemas import (
     SalesDashboardSummaryResponse,
     TopCustomerResponse,
     TopProductResponse,
+    ScheduledReportRequest,
+    ScheduledReportResponse,
+    ReportHistoryRequest,
+    ReportHistoryResponse,
 )
 
 router = APIRouter(tags=["dashboard"])
@@ -163,6 +175,54 @@ def dashboard_export_route(
         paymentMethod=paymentMethod,
         customer=customer,
     )
+
+
+@router.get("/reports/stock-movements")
+def stock_movement_report_route(
+    db: DbDependency,
+    dateFrom: str | None = None,
+    dateTo: str | None = None,
+    q: str | None = None,
+    category: str | None = None,
+    brand: str | None = None,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    return stock_movement_report(db, dateFrom, dateTo, q, category, brand, authorization)
+
+
+@router.get("/scheduled-reports", response_model=list[ScheduledReportResponse])
+def list_scheduled_reports_route(db: DbDependency, authorization: str | None = Header(default=None, alias="Authorization")):
+    return list_scheduled_reports(db, authorization)
+
+
+@router.get("/reports/history", response_model=list[ReportHistoryResponse])
+def list_report_history_route(db: DbDependency, limit: int = 50, authorization: str | None = Header(default=None, alias="Authorization")):
+    return list_report_history(db, limit, authorization)
+
+
+@router.post("/reports/history", response_model=ReportHistoryResponse)
+def create_report_history_route(payload: ReportHistoryRequest, db: DbDependency, authorization: str | None = Header(default=None, alias="Authorization")):
+    return create_report_history(payload, db, authorization)
+
+
+@router.post("/scheduled-reports", response_model=ScheduledReportResponse)
+def create_scheduled_report_route(payload: ScheduledReportRequest, db: DbDependency, authorization: str | None = Header(default=None, alias="Authorization")):
+    return create_scheduled_report(payload, db, authorization)
+
+
+@router.put("/scheduled-reports/{schedule_id}", response_model=ScheduledReportResponse)
+def update_scheduled_report_route(schedule_id: int, payload: ScheduledReportRequest, db: DbDependency, authorization: str | None = Header(default=None, alias="Authorization")):
+    return update_scheduled_report(schedule_id, payload, db, authorization)
+
+
+@router.patch("/scheduled-reports/{schedule_id}/status", response_model=ScheduledReportResponse)
+def set_scheduled_report_status_route(schedule_id: int, active: bool, db: DbDependency, authorization: str | None = Header(default=None, alias="Authorization")):
+    return set_scheduled_report_status(schedule_id, active, db, authorization)
+
+
+@router.delete("/scheduled-reports/{schedule_id}")
+def delete_scheduled_report_route(schedule_id: int, db: DbDependency, authorization: str | None = Header(default=None, alias="Authorization")):
+    return delete_scheduled_report(schedule_id, db, authorization)
 
 
 @router.get("/notifications", response_model=list[NotificationResponse])

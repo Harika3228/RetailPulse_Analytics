@@ -369,6 +369,11 @@ def _ensure_sales_user(user) -> None:
         raise HTTPException(status_code=403, detail="Sales role required")
 
 
+def _ensure_report_access(user) -> None:
+    if user.role not in ("admin", "company_admin", "super_admin", "analyst", "viewer"):
+        raise HTTPException(status_code=403, detail="Report access required")
+
+
 # ---------------------------------------------------------------------------
 # Invoice generation
 # ---------------------------------------------------------------------------

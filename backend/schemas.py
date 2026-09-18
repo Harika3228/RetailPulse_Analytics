@@ -206,6 +206,56 @@ class NotificationResponse(BaseModel):
     createdAt: str
 
 
+class ScheduledReportRequest(BaseModel):
+    name: str
+    reportType: str
+    filters: dict[str, Any] = Field(default_factory=dict)
+    frequency: str
+    executionTime: str
+    recipients: list[EmailStr] = Field(default_factory=list)
+    exportFormat: str = "csv"
+    isActive: bool = True
+
+
+class ScheduledReportResponse(BaseModel):
+    id: int
+    name: str
+    reportType: str
+    filters: dict[str, Any]
+    frequency: str
+    executionTime: str
+    recipients: list[str]
+    exportFormat: str
+    isActive: bool
+    lastGeneratedAt: str | None = None
+    lastStatus: str
+    lastError: str | None = None
+    nextRunAt: str | None = None
+    createdAt: str
+
+
+class ReportHistoryRequest(BaseModel):
+    reportType: str
+    filters: dict[str, Any] = Field(default_factory=dict)
+    exportFormat: str = "table"
+    rowCount: int = 0
+    status: str = "completed"
+    errorMessage: str | None = None
+
+
+class ReportHistoryResponse(BaseModel):
+    id: int
+    reportType: str
+    filters: dict[str, Any]
+    exportFormat: str
+    status: str
+    rowCount: int
+    errorMessage: str | None = None
+    generatedAt: str
+    generatedByUserId: int
+    generatedBy: str
+
+
 class CustomerRequest(BaseModel):
     name: str | None = None
     email: str | None = None

@@ -37,6 +37,9 @@ function getSectionFromPath(pathname) {
   if (pathname === '/forecasting') {
     return 'Forecasting';
   }
+  if (pathname === '/reports' || pathname.startsWith('/reports/')) {
+    return 'Reports';
+  }
   if (pathname === '/audit-logs') {
     return 'Audit Logs';
   }

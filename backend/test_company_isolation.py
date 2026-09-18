@@ -246,9 +246,10 @@ class CompanyIsolationTests(unittest.TestCase):
         token_a, _company_a = self._register_company_admin(suffix_a)
         token_b, _company_b = self._register_company_admin(suffix_b)
 
+        suffix_number = int(suffix_a[:4], 16) % 10000
         csv_text = (
             "name,email,phone\n"
-            f"Import Isolation {suffix_a},isolation-{suffix_a}@example.com,+1-555-100{str(int(suffix_a[:4], 16) % 10000):04d}\n"
+            f"Import Isolation {suffix_a},isolation-{suffix_a}@example.com,+1-555-100{suffix_number:04d}\n"
         )
         preview_a = self.client.post(
             f"/imports/customers/preview?fileName=isolation.csv",

@@ -270,6 +270,41 @@ class ImportRecord(Base):
     createdAt = Column(DateTime, default=datetime.now(timezone.utc))
 
 
+class ScheduledReport(Base):
+    __tablename__ = "scheduled_reports"
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    createdByUserId = Column(Integer, index=True)
+    name = Column(String)
+    reportType = Column(String, index=True)
+    filters = Column(String, default="{}")
+    frequency = Column(String, index=True)
+    executionTime = Column(String)
+    recipients = Column(String, default="[]")
+    exportFormat = Column(String, default="csv")
+    isActive = Column(Integer, default=1, index=True)
+    lastGeneratedAt = Column(DateTime)
+    lastStatus = Column(String, default="not_run")
+    lastError = Column(String)
+    nextRunAt = Column(DateTime)
+    createdAt = Column(DateTime, default=datetime.now(timezone.utc))
+    updatedAt = Column(DateTime, default=datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class ReportHistory(Base):
+    __tablename__ = "report_history"
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    generatedByUserId = Column(Integer, index=True)
+    reportType = Column(String, index=True)
+    filters = Column(String, default="{}")
+    exportFormat = Column(String, default="table")
+    status = Column(String, default="completed", index=True)
+    rowCount = Column(Integer, default=0)
+    errorMessage = Column(String)
+    generatedAt = Column(DateTime, default=datetime.now(timezone.utc), index=True)
+
+
 class ForecastSnapshot(Base):
     __tablename__ = "forecast_snapshots"
     id = Column(Integer, primary_key=True, index=True)

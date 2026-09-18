@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 from datetime import datetime, time, timezone
 
 from sqlalchemy import and_, desc, or_
@@ -9,9 +10,9 @@ from fastapi.responses import Response
 
 from backend.auth_utils import get_company_for_user, get_current_user
 from backend.database import DbDependency
-from backend.helpers import _ensure_admin, _get_company_analytics_summary, _get_company_inventory_summary, _get_company_product_summary, _get_company_sales_summary, _get_company_top_customers, _get_company_top_products, count_unread_notifications, create_audit_log, list_company_notifications
-from backend.models import AuditLog, Notification, SalesTransaction, User
-from backend.schemas import AnalyticsDashboardResponse, AuditLogResponse, DashboardResponse, InventoryDashboardSummaryResponse, NotificationResponse, ProductSummaryResponse, SalesDashboardSummaryResponse, TopCustomerResponse, TopProductResponse
+from backend.helpers import _ensure_admin, _ensure_report_access, _ensure_sales_user, _get_company_analytics_summary, _get_company_inventory_summary, _get_company_product_summary, _get_company_sales_summary, _get_company_top_customers, _get_company_top_products, count_unread_notifications, create_audit_log, list_company_notifications
+from backend.models import AuditLog, Category, Notification, Product, ReportHistory, ScheduledReport, SalesTransaction, StockMovement, User
+from backend.schemas import AnalyticsDashboardResponse, AuditLogResponse, DashboardResponse, InventoryDashboardSummaryResponse, NotificationResponse, ProductSummaryResponse, ReportHistoryRequest, ReportHistoryResponse, SalesDashboardSummaryResponse, ScheduledReportRequest, ScheduledReportResponse, TopCustomerResponse, TopProductResponse
 
 
 def dashboard(db: DbDependency, authorization: str | None = None) -> DashboardResponse:
@@ -286,6 +287,203 @@ def get_notifications(db: DbDependency, limit: int = 20, page: int = 1, unread: 
     user = get_current_user(db, token)
     unread_filter = True if unread == "true" else False if unread == "false" else None
     return list_company_notifications(db, user.companyId, user.role, user.id, limit, max(0, page - 1) * limit, unread_filter, notification_type, priority)
+
+
+def stock_movement_report(db: DbDependency, date_from: str | None = None, date_to: str | None = None, q: str | None = None, category: str | None = None, brand: str | None = None, authorization: str | None = None) -> list[dict]:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = get_current_user(db, authorization.split(" ", 1)[1])
+    query = db.query(StockMovement).join(Product, Product.id == StockMovement.productId).outerjoin(Category, Category.id == Product.categoryId).filter(StockMovement.companyId == user.companyId, Product.companyId == user.companyId)
+    if q:
+        pattern = f"%{q.strip()}%"
+        query = query.filter(StockMovement.productName.ilike(pattern) | StockMovement.sku.ilike(pattern) | StockMovement.movementType.ilike(pattern))
+    if category:
+        query = query.filter(Category.name.ilike(f"%{category.strip()}%"))
+    if brand:
+        query = query.filter(Product.brand.ilike(f"%{brand.strip()}%"))
+    if date_from:
+        query = query.filter(StockMovement.createdAt >= datetime.fromisoformat(date_from))
+    if date_to:
+        query = query.filter(StockMovement.createdAt <= datetime.fromisoformat(date_to + "T23:59:59"))
+    movements = query.order_by(StockMovement.createdAt.desc(), StockMovement.id.desc()).limit(5000).all()
+    return [
+        {
+            "id": item.id,
+            "product": item.productName or "",
+            "sku": item.sku or "",
+            "movementType": item.movementType or "",
+            "previousQuantity": item.previousQuantity,
+            "updatedQuantity": item.updatedQuantity,
+            "quantityChanged": item.quantityChanged,
+            "reference": item.reference or "",
+            "actor": item.actor or "System",
+            "createdAt": item.createdAt.isoformat() if item.createdAt else "",
+        }
+        for item in movements
+    ]
+
+
+def _scheduled_report_response(item: ScheduledReport) -> ScheduledReportResponse:
+    return ScheduledReportResponse(
+        id=item.id,
+        name=item.name or "",
+        reportType=item.reportType or "sales",
+        filters=json.loads(item.filters or "{}"),
+        frequency=item.frequency or "daily",
+        executionTime=item.executionTime or "09:00",
+        recipients=json.loads(item.recipients or "[]"),
+        exportFormat=item.exportFormat or "csv",
+        isActive=bool(item.isActive),
+        lastGeneratedAt=item.lastGeneratedAt.isoformat() if item.lastGeneratedAt else None,
+        lastStatus=item.lastStatus or "not_run",
+        lastError=item.lastError,
+        nextRunAt=item.nextRunAt.isoformat() if item.nextRunAt else None,
+        createdAt=item.createdAt.isoformat() if item.createdAt else "",
+    )
+
+
+def _report_history_response(item: ReportHistory) -> ReportHistoryResponse:
+    return ReportHistoryResponse(
+        id=item.id,
+        reportType=item.reportType or "sales",
+        filters=json.loads(item.filters or "{}"),
+        exportFormat=item.exportFormat or "table",
+        status=item.status or "completed",
+        rowCount=item.rowCount or 0,
+        errorMessage=item.errorMessage,
+        generatedAt=item.generatedAt.isoformat() if item.generatedAt else "",
+        generatedByUserId=item.generatedByUserId,
+        generatedBy=f"User #{item.generatedByUserId}",
+    )
+
+
+def list_report_history(db: DbDependency, limit: int = 50, authorization: str | None = None) -> list[ReportHistoryResponse]:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = get_current_user(db, authorization.split(" ", 1)[1])
+    _ensure_report_access(user)
+    items = db.query(ReportHistory).filter(ReportHistory.companyId == user.companyId).order_by(ReportHistory.generatedAt.desc(), ReportHistory.id.desc()).limit(max(1, min(limit, 200))).all()
+    return [_report_history_response(item) for item in items]
+
+
+def create_report_history(payload: ReportHistoryRequest, db: DbDependency, authorization: str | None = None) -> ReportHistoryResponse:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = get_current_user(db, authorization.split(" ", 1)[1])
+    _ensure_report_access(user)
+    item = ReportHistory(
+        companyId=user.companyId,
+        generatedByUserId=user.id,
+        reportType=payload.reportType,
+        filters=json.dumps(payload.filters),
+        exportFormat=payload.exportFormat,
+        status=payload.status,
+        rowCount=max(0, payload.rowCount),
+        errorMessage=payload.errorMessage,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    create_audit_log(db, company=str(user.companyId), user=user.email, action="Report Generated", entity_name=payload.reportType, resource_type="ReportHistory", resource_id=item.id, company_id=user.companyId, user_id=user.id, ip_address="Unknown", browser="Unknown")
+    return _report_history_response(item)
+
+
+def list_scheduled_reports(db: DbDependency, authorization: str | None = None) -> list[ScheduledReportResponse]:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = get_current_user(db, authorization.split(" ", 1)[1])
+    _ensure_report_access(user)
+    query = db.query(ScheduledReport).filter(ScheduledReport.companyId == user.companyId)
+    if user.role in {"analyst", "viewer"}:
+        query = query.filter(ScheduledReport.createdByUserId == user.id)
+    return [_scheduled_report_response(item) for item in query.order_by(ScheduledReport.createdAt.desc()).all()]
+
+
+def create_scheduled_report(payload: ScheduledReportRequest, db: DbDependency, authorization: str | None = None) -> ScheduledReportResponse:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = get_current_user(db, authorization.split(" ", 1)[1])
+    _ensure_report_access(user)
+    if payload.frequency not in {"daily", "weekly", "monthly"}:
+        raise HTTPException(status_code=400, detail="frequency must be daily, weekly, or monthly")
+    if payload.exportFormat not in {"csv", "pdf"}:
+        raise HTTPException(status_code=400, detail="exportFormat must be csv or pdf")
+    item = ScheduledReport(
+        companyId=user.companyId,
+        createdByUserId=user.id,
+        name=payload.name.strip(),
+        reportType=payload.reportType,
+        filters=json.dumps(payload.filters),
+        frequency=payload.frequency,
+        executionTime=payload.executionTime,
+        recipients=json.dumps([str(email) for email in payload.recipients]),
+        exportFormat=payload.exportFormat,
+        isActive=1 if payload.isActive else 0,
+        lastStatus="not_run",
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    create_audit_log(db, company=str(user.companyId), user=user.email, action="Scheduled Report Created", entity_name=item.name, resource_type="ScheduledReport", resource_id=item.id, company_id=user.companyId, user_id=user.id, ip_address="Unknown", browser="Unknown")
+    return _scheduled_report_response(item)
+
+
+def update_scheduled_report(schedule_id: int, payload: ScheduledReportRequest, db: DbDependency, authorization: str | None = None) -> ScheduledReportResponse:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = get_current_user(db, authorization.split(" ", 1)[1])
+    _ensure_report_access(user)
+    item_query = db.query(ScheduledReport).filter(ScheduledReport.id == schedule_id, ScheduledReport.companyId == user.companyId)
+    if user.role in {"analyst", "viewer"}:
+        item_query = item_query.filter(ScheduledReport.createdByUserId == user.id)
+    item = item_query.first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Scheduled report not found")
+    if payload.frequency not in {"daily", "weekly", "monthly"} or payload.exportFormat not in {"csv", "pdf"}:
+        raise HTTPException(status_code=400, detail="Invalid schedule frequency or export format")
+    item.name = payload.name.strip()
+    item.reportType = payload.reportType
+    item.filters = json.dumps(payload.filters)
+    item.frequency = payload.frequency
+    item.executionTime = payload.executionTime
+    item.recipients = json.dumps([str(email) for email in payload.recipients])
+    item.exportFormat = payload.exportFormat
+    item.isActive = 1 if payload.isActive else 0
+    db.commit()
+    db.refresh(item)
+    return _scheduled_report_response(item)
+
+
+def set_scheduled_report_status(schedule_id: int, active: bool, db: DbDependency, authorization: str | None = None) -> ScheduledReportResponse:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = get_current_user(db, authorization.split(" ", 1)[1])
+    _ensure_report_access(user)
+    item_query = db.query(ScheduledReport).filter(ScheduledReport.id == schedule_id, ScheduledReport.companyId == user.companyId)
+    if user.role in {"analyst", "viewer"}:
+        item_query = item_query.filter(ScheduledReport.createdByUserId == user.id)
+    item = item_query.first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Scheduled report not found")
+    item.isActive = 1 if active else 0
+    db.commit()
+    return _scheduled_report_response(item)
+
+
+def delete_scheduled_report(schedule_id: int, db: DbDependency, authorization: str | None = None) -> dict[str, bool]:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = get_current_user(db, authorization.split(" ", 1)[1])
+    _ensure_report_access(user)
+    item_query = db.query(ScheduledReport).filter(ScheduledReport.id == schedule_id, ScheduledReport.companyId == user.companyId)
+    if user.role in {"analyst", "viewer"}:
+        item_query = item_query.filter(ScheduledReport.createdByUserId == user.id)
+    item = item_query.first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Scheduled report not found")
+    db.delete(item)
+    db.commit()
+    return {"success": True}
 
 
 def get_unread_notification_count(db: DbDependency, authorization: str | None = None) -> dict[str, int]:

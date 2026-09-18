@@ -93,6 +93,10 @@ export const queryKeys = {
     topProducts: (queryString: string) => ['dashboard', 'top-products', queryString] as const,
     topCustomers: (queryString: string) => ['dashboard', 'top-customers', queryString] as const,
   },
+  reports: {
+    schedules: ['reports', 'schedules'] as const,
+    history: ['reports', 'history'] as const,
+  },
   forecasting: {
     summary: (period: string) => ['forecasting', 'summary', period] as const,
     products: (period: string) => ['forecasting', 'products', period] as const,

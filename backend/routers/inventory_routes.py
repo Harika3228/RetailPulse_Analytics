@@ -101,9 +101,10 @@ def list_inventory_route(
     forecast_period: str | None = None,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
+    category: str | None = Query(default=None),
     authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    return list_inventory(db, q, categoryId, brand, status_filter, authorization, sort_by, sort_direction, product, forecast_period, offset, limit)
+    return list_inventory(db, q, categoryId, brand, status_filter, authorization, sort_by, sort_direction, product, forecast_period, offset, limit, category)
 
 
 @router.get("/inventory/{product_id}/movements", response_model=list[InventoryMovementResponse])

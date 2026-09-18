@@ -34,7 +34,7 @@ export const sidebarRouteMap = {
   Sales: '/sales',
   'Sales Analytics': '/analytics/sales',
   Forecasting: '/forecasting',
-  Reports: '/dashboard',
+  Reports: '/reports',
   Notifications: '/notifications',
   Settings: '/dashboard',
   'Audit Logs': '/audit-logs',
