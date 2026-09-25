@@ -305,6 +305,41 @@ class ReportHistory(Base):
     generatedAt = Column(DateTime, default=datetime.now(timezone.utc), index=True)
 
 
+class QualityIssue(Base):
+    __tablename__ = "quality_issues"
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    issueKey = Column(String, index=True)
+    issueType = Column(String, index=True)
+    severity = Column(String, index=True)
+    affectedModule = Column(String, index=True)
+    affectedRecordType = Column(String)
+    affectedRecordId = Column(String)
+    description = Column(String)
+    detectedAt = Column(DateTime, default=datetime.now(timezone.utc), index=True)
+    status = Column(String, default="open", index=True)
+    resolution = Column(String)
+    resolvedAt = Column(DateTime)
+    resolvedByUserId = Column(Integer, index=True)
+    previousStatus = Column(String)
+    statusUpdatedAt = Column(DateTime)
+
+
+class ReconciliationExecution(Base):
+    __tablename__ = "reconciliation_executions"
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    startedAt = Column(DateTime, default=datetime.now(timezone.utc), index=True)
+    completedAt = Column(DateTime)
+    triggeredByUserId = Column(Integer, index=True)
+    recordsChecked = Column(Integer, default=0)
+    issuesDetected = Column(Integer, default=0)
+    issuesResolved = Column(Integer, default=0)
+    failedChecks = Column(Integer, default=0)
+    status = Column(String, default="running", index=True)
+    errorMessage = Column(String)
+
+
 class ForecastSnapshot(Base):
     __tablename__ = "forecast_snapshots"
     id = Column(Integer, primary_key=True, index=True)

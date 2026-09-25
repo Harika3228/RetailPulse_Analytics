@@ -28,6 +28,10 @@ from backend.controllers.dashboard_controller import (
     delete_scheduled_report,
     list_report_history,
     create_report_history,
+    data_quality_report,
+    update_data_quality_issue,
+    get_data_quality_issue,
+    list_reconciliation_history,
 )
 from backend.database import DbDependency
 from backend.schemas import (
@@ -44,6 +48,10 @@ from backend.schemas import (
     ScheduledReportResponse,
     ReportHistoryRequest,
     ReportHistoryResponse,
+    DataQualityResponse,
+    DataQualityIssueUpdate,
+    DataQualityIssue,
+    ReconciliationHistoryResponse,
 )
 
 router = APIRouter(tags=["dashboard"])
@@ -188,6 +196,31 @@ def stock_movement_report_route(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ):
     return stock_movement_report(db, dateFrom, dateTo, q, category, brand, authorization)
+
+
+@router.get("/data-quality", response_model=DataQualityResponse)
+def data_quality_report_route(db: DbDependency, search: str | None = None, issueType: str | None = None, severity: str | None = None, module: str | None = None, status: str | None = None, dateFrom: str | None = None, dateTo: str | None = None, authorization: str | None = Header(default=None, alias="Authorization")):
+    return data_quality_report(db, authorization, search, issueType, severity, module, status, dateFrom, dateTo)
+
+
+@router.post("/data-quality/reconcile", response_model=DataQualityResponse)
+def run_data_quality_reconciliation_route(db: DbDependency, authorization: str | None = Header(default=None, alias="Authorization")):
+    return data_quality_report(db, authorization)
+
+
+@router.get("/data-quality/history", response_model=list[ReconciliationHistoryResponse])
+def reconciliation_history_route(db: DbDependency, limit: int = 50, authorization: str | None = Header(default=None, alias="Authorization")):
+    return list_reconciliation_history(db, limit, authorization)
+
+
+@router.patch("/data-quality/issues/{issue_id}", response_model=DataQualityIssue)
+def update_data_quality_issue_route(issue_id: str, payload: DataQualityIssueUpdate, db: DbDependency, authorization: str | None = Header(default=None, alias="Authorization")):
+    return update_data_quality_issue(issue_id, payload, db, authorization)
+
+
+@router.get("/data-quality/issues/{issue_id}")
+def get_data_quality_issue_route(issue_id: str, db: DbDependency, authorization: str | None = Header(default=None, alias="Authorization")):
+    return get_data_quality_issue(issue_id, db, authorization)
 
 
 @router.get("/scheduled-reports", response_model=list[ScheduledReportResponse])

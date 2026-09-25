@@ -376,3 +376,32 @@ def ensure_schema() -> None:
             connection.execute(text("UPDATE sale_items SET categoryId = categoryIdSnapshot WHERE categoryId IS NULL AND categoryIdSnapshot IS NOT NULL"))
         if "lineTotal" in sales_line_columns:
             connection.execute(text("UPDATE sale_items SET total = lineTotal WHERE total IS NULL AND lineTotal IS NOT NULL"))
+
+        # data quality issue lifecycle
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS quality_issues (
+                id INTEGER PRIMARY KEY,
+                companyId INTEGER,
+                issueKey VARCHAR,
+                issueType VARCHAR,
+                severity VARCHAR,
+                affectedModule VARCHAR,
+                affectedRecordType VARCHAR,
+                affectedRecordId VARCHAR,
+                description VARCHAR,
+                detectedAt DATETIME,
+                status VARCHAR DEFAULT 'open',
+                resolution VARCHAR,
+                resolvedAt DATETIME,
+                resolvedByUserId INTEGER,
+                previousStatus VARCHAR,
+                statusUpdatedAt DATETIME
+            )
+        """))
+        quality_columns = {column["name"] for column in inspect(engine).get_columns("quality_issues")}
+        if "resolvedByUserId" not in quality_columns:
+            connection.execute(text("ALTER TABLE quality_issues ADD COLUMN resolvedByUserId INTEGER"))
+        if "previousStatus" not in quality_columns:
+            connection.execute(text("ALTER TABLE quality_issues ADD COLUMN previousStatus VARCHAR"))
+        if "statusUpdatedAt" not in quality_columns:
+            connection.execute(text("ALTER TABLE quality_issues ADD COLUMN statusUpdatedAt DATETIME"))

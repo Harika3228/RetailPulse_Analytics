@@ -256,6 +256,51 @@ class ReportHistoryResponse(BaseModel):
     generatedBy: str
 
 
+class DataQualityIssue(BaseModel):
+    id: str
+    severity: str
+    domain: str
+    message: str
+    resourceType: str
+    resourceId: str
+    status: str = "unresolved"
+    issueType: str
+    detectedAt: str
+    resolution: str | None = None
+    resolvedByUserId: int | None = None
+    resolvedAt: str | None = None
+    previousStatus: str | None = None
+    statusUpdatedAt: str | None = None
+
+
+class DataQualityResponse(BaseModel):
+    totalRecordsChecked: int
+    validRecords: int
+    warningRecords: int
+    errorRecords: int
+    unresolvedIssues: int
+    lastReconciliationAt: str
+    issues: list[DataQualityIssue] = Field(default_factory=list)
+
+
+class DataQualityIssueUpdate(BaseModel):
+    status: str
+    resolution: str | None = None
+
+
+class ReconciliationHistoryResponse(BaseModel):
+    id: int
+    startedAt: str
+    completedAt: str | None = None
+    triggeredBy: str
+    recordsChecked: int
+    issuesDetected: int
+    issuesResolved: int
+    failedChecks: int
+    status: str
+    errorMessage: str | None = None
+
+
 class CustomerRequest(BaseModel):
     name: str | None = None
     email: str | None = None

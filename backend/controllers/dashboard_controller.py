@@ -11,8 +11,8 @@ from fastapi.responses import Response
 from backend.auth_utils import get_company_for_user, get_current_user
 from backend.database import DbDependency
 from backend.helpers import _ensure_admin, _ensure_report_access, _ensure_sales_user, _get_company_analytics_summary, _get_company_inventory_summary, _get_company_product_summary, _get_company_sales_summary, _get_company_top_customers, _get_company_top_products, count_unread_notifications, create_audit_log, list_company_notifications
-from backend.models import AuditLog, Category, Notification, Product, ReportHistory, ScheduledReport, SalesTransaction, StockMovement, User
-from backend.schemas import AnalyticsDashboardResponse, AuditLogResponse, DashboardResponse, InventoryDashboardSummaryResponse, NotificationResponse, ProductSummaryResponse, ReportHistoryRequest, ReportHistoryResponse, SalesDashboardSummaryResponse, ScheduledReportRequest, ScheduledReportResponse, TopCustomerResponse, TopProductResponse
+from backend.models import AuditLog, Category, Customer, Notification, Product, QualityIssue, ReconciliationExecution, ReportHistory, ScheduledReport, SalesTransaction, SalesTransactionLine, StockMovement, User
+from backend.schemas import AnalyticsDashboardResponse, AuditLogResponse, DashboardResponse, DataQualityIssue, DataQualityIssueUpdate, DataQualityResponse, InventoryDashboardSummaryResponse, NotificationResponse, ProductSummaryResponse, ReconciliationHistoryResponse, ReportHistoryRequest, ReportHistoryResponse, SalesDashboardSummaryResponse, ScheduledReportRequest, ScheduledReportResponse, TopCustomerResponse, TopProductResponse
 
 
 def dashboard(db: DbDependency, authorization: str | None = None) -> DashboardResponse:
@@ -321,6 +321,294 @@ def stock_movement_report(db: DbDependency, date_from: str | None = None, date_t
         }
         for item in movements
     ]
+
+
+def data_quality_report(
+    db: DbDependency,
+    authorization: str | None = None,
+    search: str | None = None,
+    issue_type: str | None = None,
+    severity: str | None = None,
+    module: str | None = None,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> DataQualityResponse:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = get_current_user(db, authorization.split(" ", 1)[1])
+    _ensure_admin(user)
+    execution = ReconciliationExecution(companyId=user.companyId, triggeredByUserId=user.id, status="running", startedAt=datetime.now(timezone.utc))
+    db.add(execution)
+    db.commit()
+    try:
+        result = _run_data_quality_report(db, authorization, search, issue_type, severity, module, status, date_from, date_to)
+        execution.completedAt = datetime.now(timezone.utc)
+        execution.recordsChecked = result.totalRecordsChecked
+        execution.issuesDetected = result.errorRecords + result.warningRecords
+        execution.issuesResolved = sum(1 for issue in result.issues if issue.status == "resolved")
+        execution.status = "completed_with_issues" if result.unresolvedIssues else "completed"
+        db.commit()
+        return result
+    except Exception as error:
+        execution.completedAt = datetime.now(timezone.utc)
+        execution.status = "failed"
+        execution.failedChecks = 1
+        execution.errorMessage = str(error)
+        db.commit()
+        raise
+
+
+def _run_data_quality_report(
+    db: DbDependency,
+    authorization: str | None = None,
+    search: str | None = None,
+    issue_type: str | None = None,
+    severity: str | None = None,
+    module: str | None = None,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> DataQualityResponse:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = get_current_user(db, authorization.split(" ", 1)[1])
+    _ensure_admin(user)
+
+    issues: list[DataQualityIssue] = []
+    existing_issues = {item.issueKey: item for item in db.query(QualityIssue).filter(QualityIssue.companyId == user.companyId).all()}
+
+    def add_issue(issue_id: str, severity: str, domain: str, message: str, resource_type: str, resource_id: int | str) -> None:
+        now = datetime.now(timezone.utc)
+        issue_type = issue_id.rsplit("-", 1)[-1]
+        stored = existing_issues.get(issue_id)
+        if stored is None:
+            stored = QualityIssue(companyId=user.companyId, issueKey=issue_id, issueType=issue_type, severity=severity, affectedModule=domain, affectedRecordType=resource_type, affectedRecordId=str(resource_id), description=message, detectedAt=now, status="open")
+            db.add(stored)
+            existing_issues[issue_id] = stored
+        else:
+            stored.severity = severity
+            stored.affectedModule = domain
+            stored.description = message
+            if stored.status not in {"resolved", "ignored"}:
+                stored.status = "open"
+        issues.append(DataQualityIssue(
+            id=issue_id,
+            severity=severity,
+            domain=domain,
+            message=message,
+            resourceType=resource_type,
+            resourceId=str(resource_id),
+            issueType=issue_type,
+            detectedAt=stored.detectedAt.isoformat() if stored.detectedAt else now.isoformat(),
+            status=stored.status,
+            resolution=stored.resolution,
+        ))
+
+    products = db.query(Product).filter(Product.companyId == user.companyId).all()
+    categories = {item.id for item in db.query(Category).filter(Category.companyId == user.companyId).all()}
+    product_skus: dict[str, list[Product]] = {}
+    for product in products:
+        sku = (product.sku or "").strip().lower()
+        if not sku:
+            add_issue(f"product-{product.id}-sku", "error", "Products", "Product is missing a SKU.", "Product", product.id)
+        else:
+            product_skus.setdefault(sku, []).append(product)
+        if not (product.name or "").strip():
+            add_issue(f"product-{product.id}-name", "error", "Products", "Product is missing a name.", "Product", product.id)
+        if product.categoryId is not None and product.categoryId not in categories:
+            add_issue(f"product-{product.id}-category", "error", "Products", "Product references a category outside this company or a deleted category.", "Product", product.id)
+        if (product.stockQuantity or 0) < 0:
+            add_issue(f"product-{product.id}-stock", "error", "Inventory", "Product stock quantity is negative.", "Product", product.id)
+        if product.maxStockLevel is not None and product.maxStockLevel < 0:
+            add_issue(f"product-{product.id}-max-stock", "warning", "Inventory", "Product maximum stock level is negative.", "Product", product.id)
+    for sku, matches in product_skus.items():
+        if len(matches) > 1:
+            for product in matches:
+                add_issue(f"product-{product.id}-duplicate-sku", "error", "Products", f"SKU '{sku}' is duplicated within the company.", "Product", product.id)
+
+    customers = db.query(Customer).filter(Customer.companyId == user.companyId, Customer.isDeleted != 1).all()
+    customer_emails: dict[str, list[Customer]] = {}
+    for customer in customers:
+        email = (customer.email or "").strip().lower()
+        if not (customer.name or "").strip():
+            add_issue(f"customer-{customer.id}-name", "warning", "Customers", "Customer is missing a name.", "Customer", customer.id)
+        if email:
+            customer_emails.setdefault(email, []).append(customer)
+        else:
+            add_issue(f"customer-{customer.id}-email", "warning", "Customers", "Customer is missing an email address.", "Customer", customer.id)
+        if (customer.totalSpend or 0) < 0 or (customer.purchaseCount or 0) < 0:
+            add_issue(f"customer-{customer.id}-metrics", "error", "Customers", "Customer purchase metrics contain a negative value.", "Customer", customer.id)
+    for email, matches in customer_emails.items():
+        if len(matches) > 1:
+            for customer in matches:
+                add_issue(f"customer-{customer.id}-duplicate-email", "warning", "Customers", f"Email '{email}' is used by multiple customers.", "Customer", customer.id)
+
+    sales = db.query(SalesTransaction).filter(SalesTransaction.companyId == user.companyId).all()
+    sale_ids = [item.id for item in sales]
+    lines = db.query(SalesTransactionLine).filter(SalesTransactionLine.transactionId.in_(sale_ids)).all() if sale_ids else []
+    sale_totals: dict[int, float] = {}
+    product_ids = {product.id for product in products}
+    customer_ids = {customer.id for customer in customers}
+    for line in lines:
+        if line.productId not in product_ids:
+            add_issue(f"line-{line.id}-product", "error", "Sales", "Sales line references a product outside this company or a deleted product.", "SaleLine", line.id)
+        if (line.quantity or 0) <= 0:
+            add_issue(f"line-{line.id}-quantity", "error", "Sales", "Sales line quantity must be greater than zero.", "SaleLine", line.id)
+        sale_totals[line.transactionId] = sale_totals.get(line.transactionId, 0.0) + float(line.lineTotal or (line.quantity or 0) * (line.unitPrice or 0))
+    for sale in sales:
+        expected = round((sale.subtotalAmount or 0) - (sale.discountAmount or 0) + (sale.taxAmount or 0), 2)
+        actual = round(sale.totalAmount or 0, 2)
+        if abs(expected - actual) > 0.01:
+            add_issue(f"sale-{sale.id}-total", "warning", "Sales", f"Sale total {actual:.2f} does not match subtotal, discount, and tax calculation {expected:.2f}.", "Sale", sale.id)
+        if sale.customerId is not None and sale.customerId not in customer_ids:
+            add_issue(f"sale-{sale.id}-customer", "warning", "Sales", "Sale references a customer outside this company or a deleted customer.", "Sale", sale.id)
+    for product in products:
+        running_stock = int(product.initialStockQuantity or 0)
+        product_sales = [line for line in lines if line.productId == product.id]
+        for line in sorted(product_sales, key=lambda item: item.id):
+            running_stock -= int(line.quantity or 0)
+            if running_stock < 0:
+                add_issue(f"line-{line.id}-stock", "error", "Inventory", "Sale quantity exceeds available stock at the time of the transaction.", "SaleLine", line.id)
+                break
+    for sale_id, line_total in sale_totals.items():
+        sale = next((item for item in sales if item.id == sale_id), None)
+        if sale and abs(round(line_total, 2) - round(sale.totalAmount or 0, 2)) > 0.01:
+            add_issue(f"sale-{sale.id}-line-total", "warning", "Sales", "Report total does not match the sum of its transaction lines.", "Sale", sale.id)
+
+    movements = db.query(StockMovement).filter(StockMovement.companyId == user.companyId).all()
+    for movement in movements:
+        if movement.productId not in product_ids:
+            add_issue(f"movement-{movement.id}-product", "error", "Inventory", "Stock movement references a product outside this company or a deleted product.", "StockMovement", movement.id)
+        if movement.previousQuantity is not None and movement.quantityChanged is not None and movement.updatedQuantity is not None and movement.previousQuantity + movement.quantityChanged != movement.updatedQuantity:
+            add_issue(f"movement-{movement.id}-quantity", "error", "Inventory", "Stock movement quantities are inconsistent.", "StockMovement", movement.id)
+
+    current_issue_keys = {issue.id for issue in issues}
+    for stored in existing_issues.values():
+        if stored.issueKey not in current_issue_keys and stored.status in {"open", "investigating"}:
+            stored.status = "resolved"
+            stored.resolution = "Condition was not detected during the latest reconciliation."
+            stored.resolvedAt = datetime.now(timezone.utc)
+    db.flush()
+    total_checked = len(products) + len(customers) + len(sales) + len(lines) + len(movements)
+    error_keys = {issue.resourceType + ":" + issue.resourceId for issue in issues if issue.severity == "error"}
+    warning_keys = {issue.resourceType + ":" + issue.resourceId for issue in issues if issue.severity == "warning"}
+    invalid_keys = error_keys | warning_keys
+    now = datetime.now(timezone.utc)
+    issue_query = db.query(QualityIssue).filter(QualityIssue.companyId == user.companyId)
+    if search:
+        pattern = f"%{search.strip()}%"
+        issue_query = issue_query.filter(or_(QualityIssue.issueKey.ilike(pattern), QualityIssue.issueType.ilike(pattern), QualityIssue.affectedModule.ilike(pattern), QualityIssue.description.ilike(pattern), QualityIssue.affectedRecordId.ilike(pattern)))
+    if issue_type:
+        issue_query = issue_query.filter(QualityIssue.issueType == issue_type)
+    if severity:
+        issue_query = issue_query.filter(QualityIssue.severity == severity)
+    if module:
+        issue_query = issue_query.filter(QualityIssue.affectedModule == module)
+    if status:
+        issue_query = issue_query.filter(QualityIssue.status == status)
+    if date_from:
+        issue_query = issue_query.filter(QualityIssue.detectedAt >= datetime.fromisoformat(date_from))
+    if date_to:
+        issue_query = issue_query.filter(QualityIssue.detectedAt <= datetime.fromisoformat(date_to + "T23:59:59"))
+    stored_issues = issue_query.order_by(QualityIssue.detectedAt.desc(), QualityIssue.id.desc()).limit(500).all()
+    create_audit_log(db, company=str(user.companyId), user=user.email, action="Data Quality Reconciliation Run", entity_name="data_quality", description=f"Checked {total_checked} records and found {len(issues)} issues.", company_id=user.companyId, user_id=user.id, ip_address="Unknown", browser="Unknown")
+    return DataQualityResponse(
+        totalRecordsChecked=total_checked,
+        validRecords=max(0, total_checked - len(invalid_keys)),
+        warningRecords=len(warning_keys),
+        errorRecords=len(error_keys),
+        unresolvedIssues=sum(1 for issue in stored_issues if issue.status in {"open", "investigating"}),
+        lastReconciliationAt=now.isoformat(),
+        issues=[DataQualityIssue(id=issue.issueKey, issueType=issue.issueType, severity=issue.severity, domain=issue.affectedModule, message=issue.description, resourceType=issue.affectedRecordType, resourceId=issue.affectedRecordId, status=issue.status, detectedAt=issue.detectedAt.isoformat() if issue.detectedAt else "", resolution=issue.resolution, resolvedByUserId=issue.resolvedByUserId, resolvedAt=issue.resolvedAt.isoformat() if issue.resolvedAt else None, previousStatus=issue.previousStatus, statusUpdatedAt=issue.statusUpdatedAt.isoformat() if issue.statusUpdatedAt else None) for issue in stored_issues],
+    )
+
+
+def update_data_quality_issue(issue_id: str, payload: DataQualityIssueUpdate, db: DbDependency, authorization: str | None = None) -> DataQualityIssue:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = get_current_user(db, authorization.split(" ", 1)[1])
+    _ensure_admin(user)
+    if payload.status not in {"open", "investigating", "resolved", "ignored"}:
+        raise HTTPException(status_code=400, detail="Invalid issue status")
+    issue = db.query(QualityIssue).filter(QualityIssue.issueKey == issue_id, QualityIssue.companyId == user.companyId).first()
+    if not issue:
+        raise HTTPException(status_code=404, detail="Data quality issue not found")
+    previous_status = issue.status
+    issue.previousStatus = previous_status
+    issue.status = payload.status
+    issue.resolution = payload.resolution
+    now = datetime.now(timezone.utc)
+    issue.statusUpdatedAt = now
+    issue.resolvedAt = now if payload.status in {"resolved", "ignored"} else None
+    issue.resolvedByUserId = user.id if payload.status in {"resolved", "ignored"} else None
+    db.commit()
+    create_audit_log(db, company=str(user.companyId), user=user.email, action="Data Quality Issue Status Updated", entity_name=issue.issueKey, resource_type="QualityIssue", resource_id=issue.id, description=f"Status changed from {previous_status} to {payload.status}. {payload.resolution or ''}".strip(), company_id=user.companyId, user_id=user.id, ip_address="Unknown", browser="Unknown")
+    return DataQualityIssue(id=issue.issueKey, issueType=issue.issueType, severity=issue.severity, domain=issue.affectedModule, message=issue.description, resourceType=issue.affectedRecordType, resourceId=issue.affectedRecordId, status=issue.status, detectedAt=issue.detectedAt.isoformat(), resolution=issue.resolution, resolvedByUserId=issue.resolvedByUserId, resolvedAt=issue.resolvedAt.isoformat() if issue.resolvedAt else None, previousStatus=issue.previousStatus, statusUpdatedAt=issue.statusUpdatedAt.isoformat() if issue.statusUpdatedAt else None)
+
+
+def get_data_quality_issue(issue_id: str, db: DbDependency, authorization: str | None = None) -> dict:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = get_current_user(db, authorization.split(" ", 1)[1])
+    _ensure_admin(user)
+    issue = db.query(QualityIssue).filter(QualityIssue.issueKey == issue_id, QualityIssue.companyId == user.companyId).first()
+    if not issue:
+        raise HTTPException(status_code=404, detail="Data quality issue not found")
+
+    detail = {
+        "issue": {
+            "id": issue.issueKey,
+            "type": issue.issueType,
+            "severity": issue.severity,
+            "module": issue.affectedModule,
+            "recordType": issue.affectedRecordType,
+            "recordId": issue.affectedRecordId,
+            "description": issue.description,
+            "status": issue.status,
+            "resolution": issue.resolution,
+            "detectedAt": issue.detectedAt.isoformat() if issue.detectedAt else "",
+            "resolvedByUserId": issue.resolvedByUserId,
+            "resolvedAt": issue.resolvedAt.isoformat() if issue.resolvedAt else None,
+            "previousStatus": issue.previousStatus,
+            "statusUpdatedAt": issue.statusUpdatedAt.isoformat() if issue.statusUpdatedAt else None,
+        },
+        "record": None,
+        "currentQuantity": None,
+        "expectedQuantity": None,
+        "difference": None,
+        "stockMovements": [],
+        "relatedSales": [],
+    }
+    record_id = int(issue.affectedRecordId) if (issue.affectedRecordId or "").isdigit() else None
+    if issue.affectedRecordType in {"Product", "SaleLine"} and record_id is not None:
+        product_id = record_id
+        if issue.affectedRecordType == "SaleLine":
+            line = db.query(SalesTransactionLine).filter(SalesTransactionLine.id == record_id).first()
+            product_id = line.productId if line else None
+        product = db.query(Product).filter(Product.id == product_id, Product.companyId == user.companyId).first() if product_id else None
+        if product:
+            movements = db.query(StockMovement).filter(StockMovement.companyId == user.companyId, StockMovement.productId == product.id).order_by(StockMovement.createdAt.desc()).limit(50).all()
+            sales = db.query(SalesTransaction, SalesTransactionLine).join(SalesTransactionLine, SalesTransactionLine.transactionId == SalesTransaction.id).filter(SalesTransaction.companyId == user.companyId, SalesTransactionLine.productId == product.id).order_by(SalesTransaction.saleDateTime.desc()).limit(50).all()
+            latest_movement_quantity = movements[0].updatedQuantity if movements else None
+            current_quantity = product.stockQuantity if product.stockQuantity is not None else product.initialStockQuantity or 0
+            detail["record"] = {"id": product.id, "name": product.name, "sku": product.sku, "categoryId": product.categoryId, "brand": product.brand}
+            detail["currentQuantity"] = current_quantity
+            detail["expectedQuantity"] = latest_movement_quantity
+            detail["difference"] = current_quantity - latest_movement_quantity if latest_movement_quantity is not None else None
+            detail["stockMovements"] = [{"id": item.id, "type": item.movementType, "previous": item.previousQuantity, "updated": item.updatedQuantity, "changed": item.quantityChanged, "reference": item.reference, "createdAt": item.createdAt.isoformat() if item.createdAt else ""} for item in movements]
+            detail["relatedSales"] = [{"id": sale.id, "invoice": sale.invoiceNumber, "quantity": line.quantity, "total": sale.totalAmount, "date": sale.saleDateTime.isoformat() if sale.saleDateTime else ""} for sale, line in sales]
+    return detail
+
+
+def list_reconciliation_history(db: DbDependency, limit: int = 50, authorization: str | None = None) -> list[ReconciliationHistoryResponse]:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    user = get_current_user(db, authorization.split(" ", 1)[1])
+    _ensure_admin(user)
+    executions = db.query(ReconciliationExecution).filter(ReconciliationExecution.companyId == user.companyId).order_by(ReconciliationExecution.startedAt.desc(), ReconciliationExecution.id.desc()).limit(max(1, min(limit, 200))).all()
+    users = {item.id: item for item in db.query(User).filter(User.companyId == user.companyId).all()}
+    return [ReconciliationHistoryResponse(id=item.id, startedAt=item.startedAt.isoformat() if item.startedAt else "", completedAt=item.completedAt.isoformat() if item.completedAt else None, triggeredBy=(users.get(item.triggeredByUserId).name or users.get(item.triggeredByUserId).email) if users.get(item.triggeredByUserId) else f"User #{item.triggeredByUserId}", recordsChecked=item.recordsChecked or 0, issuesDetected=item.issuesDetected or 0, issuesResolved=item.issuesResolved or 0, failedChecks=item.failedChecks or 0, status=item.status or "running", errorMessage=item.errorMessage) for item in executions]
 
 
 def _scheduled_report_response(item: ScheduledReport) -> ScheduledReportResponse:

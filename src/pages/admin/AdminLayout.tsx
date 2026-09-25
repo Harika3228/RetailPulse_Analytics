@@ -40,6 +40,9 @@ function getSectionFromPath(pathname) {
   if (pathname === '/reports' || pathname.startsWith('/reports/')) {
     return 'Reports';
   }
+  if (pathname === '/data-quality') {
+    return 'Data Quality';
+  }
   if (pathname === '/audit-logs') {
     return 'Audit Logs';
   }

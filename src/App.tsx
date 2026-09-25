@@ -21,6 +21,7 @@ import InventoryForecastPage from './pages/admin/InventoryForecastPage.tsx';
 import AuditLogsPage from './pages/admin/AuditLogsPage.tsx';
 import ForecastingPage from './pages/admin/ForecastingPage.tsx';
 import ReportsPage from './pages/admin/ReportsPage.tsx';
+import DataQualityPage from './pages/admin/DataQualityPage.tsx';
 import { AuthProvider, useAuth } from './auth/AuthContext.tsx';
 import ErrorBoundary from './components/admin/ErrorBoundary.tsx';
 
@@ -237,6 +238,14 @@ function AppRoutes() {
         element={
           <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
             <AuditLogsPage />
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/data-quality"
+        element={
+          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
+            <DataQualityPage />
           </RoleProtectedRoute>
         }
       />

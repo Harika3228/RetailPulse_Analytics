@@ -97,6 +97,11 @@ export const queryKeys = {
     schedules: ['reports', 'schedules'] as const,
     history: ['reports', 'history'] as const,
   },
+  dataQuality: {
+    report: ['data-quality', 'report'] as const,
+    detail: (id: string) => ['data-quality', 'detail', id] as const,
+    history: ['data-quality', 'history'] as const,
+  },
   forecasting: {
     summary: (period: string) => ['forecasting', 'summary', period] as const,
     products: (period: string) => ['forecasting', 'products', period] as const,
