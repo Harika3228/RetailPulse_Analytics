@@ -1,6 +1,7 @@
 import { Box, LinearProgress, Step, StepLabel, Stepper, Typography } from '@mui/material';
 import { useEffect, useState } from 'react';
-import type { ImportResult, PreviewResponse } from '../../lib/importTypes';
+import type { ImportBatch, ImportResult, PreviewResponse } from '../../lib/importTypes';
+import { historyStatusMeta } from '../../lib/importStatus';
 
 export const PIPELINE_STEPS = ['Upload File', 'Validate Records', 'Preview', 'Import Data', 'Summary & History'];
 
@@ -9,6 +10,7 @@ export type ImportPhase = 'idle' | 'uploading' | 'validating' | 'processing';
 type ImportPipelineProps = {
   phase: ImportPhase;
   preview: PreviewResponse | null;
+  activeBatch: ImportBatch | null;
   lastResult: ImportResult | null;
   selectedFile: File | null;
   processing: boolean;
@@ -32,11 +34,15 @@ function activeStepFor(
 function progressMessageFor(
   phase: ImportPhase,
   preview: PreviewResponse | null,
+  activeBatch: ImportBatch | null,
   lastResult: ImportResult | null,
   selectedFile: File | null,
 ): string | null {
   if (phase === 'processing') {
-    return `Processing ${preview?.validRows ?? 0} valid record${preview?.validRows === 1 ? '' : 's'} — writing to the database. Keep this page open; large files may take a moment.`;
+    const statusLabel = historyStatusMeta(activeBatch?.status ?? 'queued').label;
+    const processed = activeBatch?.processedCount ?? 0;
+    const total = activeBatch?.totalRows ?? preview?.validRows ?? 0;
+    return `${statusLabel}: ${processed} of ${total} records processed.`;
   }
   if (phase === 'validating') {
     return 'Validating records against required columns and existing data — checking for duplicates and errors…';
@@ -47,7 +53,8 @@ function progressMessageFor(
       : 'Uploading file…';
   }
   if (lastResult) {
-    return `Import completed: ${lastResult.insertedCount ?? 0} added, ${
+    const statusLabel = historyStatusMeta(lastResult.status ?? 'completed').label;
+    return `Import ${statusLabel.toLowerCase()}: ${lastResult.insertedCount ?? 0} added, ${
       (lastResult.invalidCount ?? 0) + (lastResult.duplicateCount ?? 0) + (lastResult.failedCount ?? 0)
     } issues, of ${lastResult.totalRows ?? 0} record${lastResult.totalRows === 1 ? '' : 's'}.`;
   }
@@ -57,24 +64,20 @@ function progressMessageFor(
   return null;
 }
 
-// Worst-case percentage each asynchronous stage should approach while it is
-// running. Because the backend operations are synchronous single requests, the
-// bar advances on a timer toward a stage ceiling so the user sees live progress
-// rather than an indeterminate spinner.
 const STAGE_TARGETS: Record<ImportPhase, { start: number; target: number }> = {
   uploading: { start: 5, target: 30 },
   validating: { start: 35, target: 75 },
-  processing: { start: 80, target: 98 },
+  processing: { start: 0, target: 0 },
   idle: { start: 0, target: 0 },
 };
 
-export default function ImportPipeline({ phase, preview, lastResult, selectedFile, processing }: ImportPipelineProps) {
+export default function ImportPipeline({ phase, preview, activeBatch, lastResult, selectedFile, processing }: ImportPipelineProps) {
   const activeStep = activeStepFor(phase, preview, lastResult);
-  const progressMessage = progressMessageFor(phase, preview, lastResult, selectedFile);
+  const progressMessage = progressMessageFor(phase, preview, activeBatch, lastResult, selectedFile);
   const [progress, setProgress] = useState(0);
 
   useEffect(() => {
-    if (!processing) {
+    if (!processing || phase === 'processing') {
       setProgress(0);
       return;
     }
@@ -113,11 +116,14 @@ export default function ImportPipeline({ phase, preview, lastResult, selectedFil
             }}
           >
             <span>
-              {phase === 'uploading' ? 'Uploading file…' : phase === 'validating' ? 'Validating records…' : 'Importing into database…'}
+              {phase === 'uploading' ? 'Uploading file…' : phase === 'validating' ? 'Validating records…' : `${historyStatusMeta(activeBatch?.status ?? 'queued').label} records…`}
             </span>
-            <span>{Math.round(progress)}%</span>
+            <span>{phase === 'processing' ? `${activeBatch?.progressPercent ?? 0}%` : `${Math.round(progress)}%`}</span>
           </Box>
-          <LinearProgress variant="determinate" value={progress} />
+          <LinearProgress
+            variant="determinate"
+            value={phase === 'processing' ? activeBatch?.progressPercent ?? 0 : progress}
+          />
         </Box>
       ) : null}
       {progressMessage ? (

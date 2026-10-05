@@ -2,8 +2,9 @@ import { TextField } from '@mui/material';
 
 export const ENTITY_OPTIONS = [
   { value: 'products', label: 'Products' },
+  { value: 'inventory', label: 'Inventory' },
   { value: 'customers', label: 'Customers' },
-  { value: 'sales', label: 'Sales Transactions' },
+  { value: 'sales', label: 'Sales' },
 ];
 
 type ImportTypeSelectorProps = {

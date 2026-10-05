@@ -7,6 +7,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  LinearProgress,
   Stack,
   Table,
   TableBody,
@@ -28,12 +29,28 @@ type ImportHistoryTableProps = {
   detailBatch: ImportBatchDetail | null;
   detailErrors?: ImportErrorsResponse | null;
   onView: (batchId: number) => void;
+  onCancel: (batchId: number) => void;
   onDownloadFailed: (batchId: number) => void;
   onDelete: (batch: ImportBatch) => void;
   onCloseDetail: () => void;
 };
 
-const COLUMN_COUNT = 10;
+const COLUMN_COUNT = 12;
+
+function formatDuration(seconds?: number | null): string {
+  if (seconds == null) return '-';
+  if (seconds < 60) return `${seconds.toFixed(2)} s`;
+  return `${Math.floor(seconds / 60)} min ${(seconds % 60).toFixed(0)} s`;
+}
+
+function summarizeRecordData(data: unknown): string {
+  if (!data || typeof data !== 'object') {
+    return '-';
+  }
+  return Object.entries(data as Record<string, unknown>)
+    .map(([key, value]) => `${key}: ${String(value ?? '')}`)
+    .join(' | ') || '-';
+}
 
 export default function ImportHistoryTable({
   loading,
@@ -41,6 +58,7 @@ export default function ImportHistoryTable({
   detailBatch,
   detailErrors,
   onView,
+  onCancel,
   onDownloadFailed,
   onDelete,
   onCloseDetail,
@@ -60,8 +78,10 @@ export default function ImportHistoryTable({
               <TableCell>Uploaded By</TableCell>
               <TableCell>Upload Date</TableCell>
               <TableCell>Total Records</TableCell>
+              <TableCell>Progress</TableCell>
               <TableCell>Successful Records</TableCell>
               <TableCell>Failed Records</TableCell>
+              <TableCell>Processing Duration</TableCell>
               <TableCell>Status</TableCell>
               <TableCell>Actions</TableCell>
             </TableRow>
@@ -80,8 +100,17 @@ export default function ImportHistoryTable({
                     <TableCell>{batch.importedBy || '-'}</TableCell>
                     <TableCell>{formatDate(batch.createdAt)}</TableCell>
                     <TableCell>{batch.totalRows}</TableCell>
+                    <TableCell sx={{ minWidth: 130 }}>
+                      <Stack spacing={0.5}>
+                        <Typography variant="caption">
+                          {batch.processedCount} / {batch.totalRows} ({batch.progressPercent}%)
+                        </Typography>
+                        <LinearProgress variant="determinate" value={batch.progressPercent} />
+                      </Stack>
+                    </TableCell>
                     <TableCell>{batch.insertedCount}</TableCell>
                     <TableCell>{batch.failedCount}</TableCell>
+                    <TableCell>{formatDuration(batch.durationSeconds)}</TableCell>
                     <TableCell>
                       <Chip size="small" color={statusMeta.color} label={statusMeta.label} />
                     </TableCell>
@@ -90,12 +119,22 @@ export default function ImportHistoryTable({
                         <Button size="small" onClick={() => onView(batch.id)}>
                           View
                         </Button>
-                        {batch.invalidCount + batch.duplicateCount + batch.failedCount > 0 ? (
-                          <Button size="small" onClick={() => onDownloadFailed(batch.id)}>
-                            Issues CSV
+                        {['queued', 'processing'].includes(batch.status) ? (
+                          <Button size="small" color="error" onClick={() => onCancel(batch.id)}>
+                            Cancel
                           </Button>
                         ) : null}
-                        <Button size="small" color="error" onClick={() => onDelete(batch)}>
+                        {batch.invalidCount + batch.duplicateCount + batch.failedCount > 0 || batch.status === 'cancelled' ? (
+                          <Button size="small" onClick={() => onDownloadFailed(batch.id)}>
+                            Error CSV
+                          </Button>
+                        ) : null}
+                        <Button
+                          size="small"
+                          color="error"
+                          onClick={() => onDelete(batch)}
+                          disabled={['queued', 'processing'].includes(batch.status)}
+                        >
                           Delete
                         </Button>
                       </Stack>
@@ -121,10 +160,34 @@ export default function ImportHistoryTable({
       <Dialog open={Boolean(detailBatch)} onClose={onCloseDetail} maxWidth="md" fullWidth>
         <DialogTitle>Import #{detailBatch?.id} — Row Results</DialogTitle>
         <DialogContent dividers>
+          {detailBatch ? (
+            <Box sx={{ mb: 2 }}>
+              <Stack direction="row" spacing={2} useFlexGap flexWrap="wrap" sx={{ mb: 1 }}>
+                <Typography variant="body2">Status: {historyStatusMeta(detailBatch.status).label}</Typography>
+                <Typography variant="body2">Total: {detailBatch.totalRows}</Typography>
+                <Typography variant="body2">Successful: {detailBatch.insertedCount}</Typography>
+                <Typography variant="body2">Failed: {detailBatch.failedCount}</Typography>
+                <Typography variant="body2">Skipped: {detailBatch.invalidCount + detailBatch.duplicateCount}</Typography>
+                <Typography variant="body2">Duplicates: {detailBatch.duplicateCount}</Typography>
+                <Typography variant="body2">Duration: {formatDuration(detailBatch.durationSeconds)}</Typography>
+              </Stack>
+              <Typography variant="caption" color="text.secondary">
+                Uploaded {formatDate(detailBatch.createdAt)} by {detailBatch.importedBy || '-'}
+                {detailBatch.startedAt ? ` · Started ${formatDate(detailBatch.startedAt)}` : ''}
+                {detailBatch.completedAt ? ` · Completed ${formatDate(detailBatch.completedAt)}` : ''}
+              </Typography>
+              {detailBatch.failureMessage ? (
+                <Typography variant="body2" color="error" sx={{ mt: 1 }}>
+                  {detailBatch.failureMessage}
+                </Typography>
+              ) : null}
+            </Box>
+          ) : null}
           <Table size="small">
             <TableHead>
               <TableRow>
                 <TableCell>Row</TableCell>
+                <TableCell>Record Information</TableCell>
                 <TableCell>Status</TableCell>
                 <TableCell>Message</TableCell>
               </TableRow>
@@ -133,6 +196,7 @@ export default function ImportHistoryTable({
               {(detailBatch?.rows ?? []).map((row) => (
                 <TableRow key={`${row.id ?? row.rowNumber}`}>
                   <TableCell>{row.rowNumber}</TableCell>
+                  <TableCell>{summarizeRecordData(row.rowData?.row)}</TableCell>
                   <TableCell>
                     <Chip
                       size="small"
@@ -154,16 +218,20 @@ export default function ImportHistoryTable({
                 <TableHead>
                   <TableRow>
                     <TableCell>Row</TableCell>
-                    <TableCell>Field</TableCell>
+                    <TableCell>Record Information</TableCell>
+                    <TableCell>Error Type</TableCell>
                     <TableCell>Message</TableCell>
+                    <TableCell>Processing Status</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {detailErrors.errors.map((error, index) => (
                     <TableRow key={`${error.rowNumber}-${index}`}>
                       <TableCell>{error.rowNumber}</TableCell>
-                      <TableCell>{error.field || '-'}</TableCell>
+                      <TableCell>{summarizeRecordData(error.recordData)}</TableCell>
+                      <TableCell>{error.errorType}</TableCell>
                       <TableCell>{error.message}</TableCell>
+                      <TableCell>{error.status}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

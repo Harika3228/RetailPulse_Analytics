@@ -252,10 +252,15 @@ class ImportBatch(Base):
     insertedCount = Column(Integer, default=0)
     updatedCount = Column(Integer, default=0)
     failedCount = Column(Integer, default=0)
-    status = Column(String, default="pending", index=True)
+    processedCount = Column(Integer, default=0)
+    cancelRequested = Column(Integer, default=0)
+    failureMessage = Column(String)
+    status = Column(String, default="uploaded", index=True)
     importedBy = Column(String)
     createdAt = Column(DateTime, default=datetime.now(timezone.utc))
+    startedAt = Column(DateTime)
     completedAt = Column(DateTime)
+    durationSeconds = Column(Float)
 
 
 class ImportRecord(Base):

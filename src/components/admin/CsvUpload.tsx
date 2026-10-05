@@ -2,7 +2,7 @@ import { Alert, Box, Button, Stack, Typography } from '@mui/material';
 import { useState, type ChangeEvent } from 'react';
 import { findMissingRequiredColumns, parseCsvHeaderLine } from '../../lib/importColumns';
 
-const DEFAULT_MAX_FILE_SIZE_MB = 10;
+const DEFAULT_MAX_FILE_SIZE_MB = 25;
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) {

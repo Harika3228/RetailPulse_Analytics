@@ -48,6 +48,7 @@ export default function DataImportsPage() {
   const [errorMessage, setErrorMessage] = useState('');
   const [uploading, setUploading] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
   const [phase, setPhase] = useState<ImportPhase>('idle');
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [resultFilter, setResultFilter] = useState<ValidationResultFilter>('all');
@@ -55,14 +56,80 @@ export default function DataImportsPage() {
   const [detailBatch, setDetailBatch] = useState<ImportBatchDetail | null>(null);
   const [detailErrors, setDetailErrors] = useState<ImportErrorsResponse | null>(null);
 
-  const historyQuery = useApiQuery<ImportBatch[]>(queryKeys.imports.list, '/imports', token);
+  const downloadTemplate = () => {
+    const templates: Record<string, string> = {
+      products: 'SKU,Name,CategoryName,Brand,UnitPrice,CostPrice,StockQuantity,MaxStockLevel,UnitOfMeasure,Status\nSKU-001,Example Product,Electronics,Example Brand,99.99,50,25,100,each,active\n',
+      inventory: 'SKU,StockQuantity,Reason\nSKU-001,25,Physical stock count\n',
+      customers: 'Name,Email,Phone,City,State,Country,CustomerType,Status\nExample Customer,customer@example.com,+15551234567,Seattle,WA,USA,retail,active\n',
+      sales: 'InvoiceNumber,SKU,Quantity,CustomerName,CustomerEmail,UnitPrice,SaleDateTime,SalesChannel,PaymentMethod\nINV-EXAMPLE-001,SKU-001,2,Example Customer,customer@example.com,99.99,2026-09-22T10:00:00,In-Store,Cash\n',
+    };
+    const blob = new Blob([templates[entityType]], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${entityType}-import-template.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const historyQuery = useApiQuery<ImportBatch[]>(queryKeys.imports.list, '/imports', token, {
+    refetchInterval: (query) => {
+      const batches = query.state.data as ImportBatch[] | undefined;
+      return batches?.some((batch) => ['queued', 'processing'].includes(batch.status)) ? 1000 : false;
+    },
+  });
   const history = historyQuery.data ?? [];
+  const activeBatchQuery = useApiQuery<ImportBatchDetail>(
+    queryKeys.imports.detail(activeBatchId ?? 0),
+    `/imports/${activeBatchId ?? 0}`,
+    token,
+    { enabled: Boolean(activeBatchId), refetchInterval: activeBatchId ? 1000 : false },
+  );
+  const activeBatch = activeBatchQuery.data?.id === activeBatchId ? activeBatchQuery.data : null;
 
   useEffect(() => {
     if (historyQuery.error) {
       setErrorMessage(historyQuery.error.message || 'Failed to load import history');
     }
   }, [historyQuery.error]);
+
+  useEffect(() => {
+    if (!activeBatchId || !activeBatch || !['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(activeBatch.status)) {
+      return;
+    }
+    setLastResult({
+      batchId: activeBatch.id,
+      status: activeBatch.status,
+      entityType: activeBatch.entityType,
+      fileName: activeBatch.fileName,
+      totalRows: activeBatch.totalRows,
+      processedCount: activeBatch.processedCount,
+      progressPercent: activeBatch.progressPercent,
+      failureMessage: activeBatch.failureMessage,
+      importedBy: activeBatch.importedBy,
+      createdAt: activeBatch.createdAt,
+      startedAt: activeBatch.startedAt,
+      completedAt: activeBatch.completedAt,
+      durationSeconds: activeBatch.durationSeconds,
+      insertedCount: activeBatch.insertedCount,
+      skippedCount: activeBatch.invalidCount + activeBatch.duplicateCount,
+      failedCount: activeBatch.failedCount,
+      invalidCount: activeBatch.invalidCount,
+      duplicateCount: activeBatch.duplicateCount,
+    });
+    if (activeBatch.failureMessage) {
+      setErrorMessage(activeBatch.failureMessage);
+    }
+    setSelectedFile(null);
+    setActiveBatchId(null);
+    setPhase('idle');
+    queryClient.invalidateQueries({ queryKey: queryKeys.imports.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.products.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.sales.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.inventory.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.summary });
+  }, [activeBatch, activeBatchId, queryClient]);
 
   const invalidateDependentData = () => {
     queryClient.invalidateQueries({ queryKey: queryKeys.imports.all });
@@ -134,14 +201,30 @@ const result = await apiUploadCsv(
       const result = (await apiRequest(`/imports/${batchId}/confirm`, token, {
         method: 'POST',
       })) as ImportResult;
-      setSelectedFile(null);
-      setLastResult(result);
-      invalidateDependentData();
+      setLastResult(null);
+      setActiveBatchId(result.batchId);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to process the import.');
     } finally {
       setConfirming(false);
       setPhase('idle');
+    }
+  };
+
+  const cancelImport = async (batchId?: number) => {
+    const targetBatchId = batchId ?? activeBatchId;
+    if (!token || !targetBatchId) {
+      return;
+    }
+    try {
+      await apiRequest(`/imports/${targetBatchId}/cancel`, token, { method: 'POST' });
+      if (targetBatchId === activeBatchId) {
+        await activeBatchQuery.refetch();
+      } else {
+        await historyQuery.refetch();
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to cancel the import.');
     }
   };
 
@@ -207,7 +290,7 @@ const result = await apiUploadCsv(
     }
   };
 
-  const processing = uploading || confirming;
+  const processing = uploading || confirming || Boolean(activeBatchId);
   const previewReady = Boolean(preview && !lastResult);
 
   return (
@@ -220,8 +303,9 @@ const result = await apiUploadCsv(
         </Box>
         <Box sx={{ px: 2, pt: 1 }}>
           <ImportPipeline
-            phase={phase}
+            phase={activeBatchId ? 'processing' : phase}
             preview={preview}
+            activeBatch={activeBatch}
             lastResult={lastResult}
             selectedFile={selectedFile}
             processing={processing}
@@ -237,6 +321,7 @@ const result = await apiUploadCsv(
             }}
             disabled={processing}
           />
+          <Button variant="outlined" onClick={downloadTemplate} disabled={processing}>Download Template</Button>
           <CsvUpload
             selectedFile={selectedFile}
             onFileChange={handleCsvFileChange}
@@ -276,6 +361,11 @@ const result = await apiUploadCsv(
                   ? 'Validating…'
                   : 'Upload & Validate'}
           </Button>
+          {activeBatchId ? (
+            <Button variant="outlined" color="error" onClick={() => cancelImport()}>
+              Cancel Import
+            </Button>
+          ) : null}
         </Stack>
         <Typography variant="caption" color="text.secondary" sx={{ px: 2, pb: 0.5, display: 'block' }}>
           Required columns for {importTypeLabel(entityType)}: {describeRequiredColumns(entityType) || '—'}
@@ -294,7 +384,7 @@ const result = await apiUploadCsv(
             resultFilter={resultFilter}
             onResultFilterChange={setResultFilter}
             onImport={() => startImport(preview.batchId)}
-            importing={confirming}
+            importing={processing}
           />
         </>
       ) : null}
@@ -314,6 +404,7 @@ const result = await apiUploadCsv(
         detailBatch={detailBatch}
         detailErrors={detailErrors}
         onView={openBatchDetail}
+        onCancel={cancelImport}
         onDownloadFailed={downloadFailedCsv}
         onDelete={deleteBatch}
         onCloseDetail={() => {

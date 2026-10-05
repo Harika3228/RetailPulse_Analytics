@@ -16,7 +16,7 @@ from backend.helpers import (
     create_audit_log,
     create_notification,
 )
-from backend.models import Category, Product, SalesTransaction, SalesTransactionLine, StockAdjustment
+from backend.models import Category, Product, SalesTransaction, SalesTransactionLine, StockAdjustment, StockMovement
 from backend.schemas import (
     ForecastSeriesPoint,
     ForecastSeriesResponse,
@@ -650,6 +650,34 @@ def list_inventory_movements(
                 user=str(adjustment.adjustedBy) if adjustment.adjustedBy is not None else "System",
                 reference=adjustment.reason,
                 timestamp=adjustment.adjustmentDate.isoformat() if adjustment.adjustmentDate else None,
+            )
+        )
+
+    inventory_import_movements = (
+        db.query(StockMovement)
+        .filter(
+            StockMovement.companyId == user.companyId,
+            StockMovement.productId == product_id,
+            StockMovement.movementType == "Inventory Import",
+        )
+        .order_by(StockMovement.createdAt.asc(), StockMovement.id.asc())
+        .all()
+    )
+    for movement in inventory_import_movements:
+        movements.append(
+            InventoryMovementResponse(
+                id=f"import-{movement.id}",
+                productId=product.id,
+                productName=product.name,
+                sku=product.sku,
+                movementType=movement.movementType,
+                previousQuantity=int(movement.previousQuantity or 0),
+                updatedQuantity=int(movement.updatedQuantity or 0),
+                quantityChanged=int(movement.quantityChanged or 0),
+                reason=movement.reference or "Inventory CSV import",
+                user=movement.actor or "System",
+                reference=movement.reference or "Inventory CSV import",
+                timestamp=movement.createdAt.isoformat() if movement.createdAt else None,
             )
         )
 

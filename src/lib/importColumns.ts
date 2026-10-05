@@ -7,6 +7,10 @@ export type ImportFieldRequirement = {
 // every group must appear in the CSV header for the import to proceed. Mirrors
 // REQUIRED_COLUMN_GROUPS / FIELD_ALIASES in backend/controllers/imports_controller.py.
 export const REQUIRED_IMPORT_COLUMNS: Record<string, ImportFieldRequirement[][]> = {
+  inventory: [
+    [{ label: 'SKU', aliases: ['sku', 'skucode', 'productcode', 'itemcode'] }],
+    [{ label: 'Stock Quantity', aliases: ['stockquantity', 'stock', 'quantity', 'qty', 'countedstock'] }],
+  ],
   products: [
     [{ label: 'SKU', aliases: ['sku', 'skucode', 'productcode', 'itemcode'] }],
     [{ label: 'Product Name', aliases: ['name', 'productname', 'product'] }],

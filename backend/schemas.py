@@ -977,6 +977,8 @@ class ImportRecordResponse(BaseModel):
 class ImportErrorResponse(BaseModel):
     rowNumber: int
     field: str | None = None
+    recordData: dict[str, Any] = Field(default_factory=dict)
+    errorType: str
     message: str
     status: str
 
@@ -998,10 +1000,16 @@ class ImportBatchResponse(BaseModel):
     insertedCount: int
     updatedCount: int
     failedCount: int
+    processedCount: int = 0
+    progressPercent: int = 0
+    cancelRequested: bool = False
+    failureMessage: str | None = None
     status: str
     importedBy: str | None = None
     createdAt: str | None = None
+    startedAt: str | None = None
     completedAt: str | None = None
+    durationSeconds: float | None = None
 
 
 class ImportBatchDetailResponse(ImportBatchResponse):
@@ -1020,3 +1028,10 @@ class ImportConfirmResponse(BaseModel):
     invalidCount: int
     duplicateCount: int
     skippedCount: int
+    processedCount: int = 0
+    progressPercent: int = 0
+    importedBy: str | None = None
+    createdAt: str | None = None
+    startedAt: str | None = None
+    completedAt: str | None = None
+    durationSeconds: float | None = None

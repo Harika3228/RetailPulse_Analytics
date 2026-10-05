@@ -1,14 +1,26 @@
 import time
 import unittest
 import uuid
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from backend.controllers.imports_controller import _record_import_event, enqueue_import
+from backend.database import SessionLocal
 from backend.main import app
+from backend.models import (
+    AuditLog,
+    ImportBatch,
+    Notification,
+    QualityIssue,
+    ReconciliationExecution,
+    StockMovement,
+    User,
+)
 
 
 def _unique_suffix() -> str:
-    return f"{uuid.uuid4().hex[:8]}{int(time.time() * 1000) % 100000}"
+    return f"{uuid.uuid4().int % 100000000:08d}{int(time.time() * 1000) % 100000:05d}"
 
 
 class DataImportModuleTests(unittest.TestCase):
@@ -35,6 +47,322 @@ class DataImportModuleTests(unittest.TestCase):
             headers={**self.headers, "Content-Type": "text/csv"},
         )
 
+    def _confirm_import(self, batch_id: int):
+        response = self.client.post(f"/imports/{batch_id}/confirm", headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["status"], "queued")
+        detail_response = self.client.get(f"/imports/{batch_id}", headers=self.headers)
+        self.assertEqual(detail_response.status_code, 200, detail_response.text)
+        batch = detail_response.json()
+        self.assertEqual(batch["progressPercent"], 100)
+        self.assertTrue(batch["startedAt"])
+        self.assertTrue(batch["completedAt"])
+        self.assertGreaterEqual(batch["durationSeconds"], 0)
+        self.assertTrue(batch["importedBy"])
+        batch["skippedCount"] = batch["invalidCount"] + batch["duplicateCount"]
+        return batch
+
+    def test_inventory_import_updates_stock_and_records_movement(self):
+        suffix = _unique_suffix()
+        category_id = self._create_category()
+        product_response = self.client.post(
+            "/products",
+            headers=self.headers,
+            json={
+                "name": f"Inventory Import {suffix}",
+                "sku": f"INV-{suffix}",
+                "categoryId": category_id,
+                "brand": "Import Test",
+                "unitPrice": 20,
+                "costPrice": 10,
+                "stockQuantity": 5,
+                "unitOfMeasure": "each",
+            },
+        )
+        self.assertEqual(product_response.status_code, 200, product_response.text)
+        product_id = product_response.json()["id"]
+
+        preview_response = self._upload_csv(
+            "inventory",
+            f"SKU,StockQuantity,Reason\nINV-{suffix},12,Physical count\n",
+        )
+        self.assertEqual(preview_response.status_code, 200, preview_response.text)
+        preview = preview_response.json()
+        self.assertEqual(preview["validRows"], 1)
+
+        confirmed = self._confirm_import(preview["batchId"])
+        self.assertEqual(confirmed["status"], "completed")
+
+        updated_product = self.client.get(f"/products/{product_id}", headers=self.headers)
+        self.assertEqual(updated_product.status_code, 200)
+        self.assertEqual(updated_product.json()["stockQuantity"], 12)
+        movements = self.client.get(f"/inventory/{product_id}/movements", headers=self.headers)
+        self.assertEqual(movements.status_code, 200)
+        self.assertTrue(any(item["movementType"] == "Inventory Import" for item in movements.json()))
+
+    def test_inventory_import_runs_reconciliation_and_surfaces_quality_issue(self):
+        suffix = _unique_suffix()
+        category_id = self._create_category()
+        product_response = self.client.post(
+            "/products",
+            headers=self.headers,
+            json={
+                "name": f"Reconcile Inventory {suffix}",
+                "sku": f"DQ-{suffix}",
+                "categoryId": category_id,
+                "brand": "Quality Check",
+                "unitPrice": 12,
+                "costPrice": 6,
+                "stockQuantity": 5,
+                "unitOfMeasure": "each",
+            },
+        )
+        self.assertEqual(product_response.status_code, 200, product_response.text)
+        product_id = product_response.json()["id"]
+
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.email == "admin@retailpulse.com").first()
+            before_count = db.query(ReconciliationExecution).filter(
+                ReconciliationExecution.companyId == user.companyId
+            ).count()
+            movement = StockMovement(
+                companyId=user.companyId,
+                productId=product_id,
+                productName=f"Reconcile Inventory {suffix}",
+                sku=f"DQ-{suffix}",
+                movementType="Test Inconsistency",
+                previousQuantity=5,
+                quantityChanged=1,
+                updatedQuantity=99,
+                reference="quality integration test",
+                actor=user.email,
+                actorUserId=user.id,
+            )
+            db.add(movement)
+            db.commit()
+            movement_id = movement.id
+            company_id = user.companyId
+        finally:
+            db.close()
+
+        preview = self._upload_csv("inventory", f"SKU,StockQuantity\nDQ-{suffix},8\n")
+        self.assertEqual(preview.status_code, 200, preview.text)
+        completed = self._confirm_import(preview.json()["batchId"])
+        self.assertEqual(completed["status"], "completed")
+
+        db = SessionLocal()
+        try:
+            issue = db.query(QualityIssue).filter(
+                QualityIssue.companyId == company_id,
+                QualityIssue.issueKey == f"movement-{movement_id}-quantity",
+            ).first()
+            self.assertIsNotNone(issue)
+            self.assertEqual(issue.status, "open")
+            latest = db.query(ReconciliationExecution).filter(
+                ReconciliationExecution.companyId == company_id
+            ).order_by(ReconciliationExecution.id.desc()).first()
+            self.assertGreater(db.query(ReconciliationExecution).filter(
+                ReconciliationExecution.companyId == company_id
+            ).count(), before_count)
+            self.assertIn(latest.status, {"completed", "completed_with_issues"})
+        finally:
+            db.close()
+
+        report = self.client.get("/data-quality", headers=self.headers)
+        self.assertEqual(report.status_code, 200, report.text)
+        self.assertTrue(any(item["id"] == f"movement-{movement_id}-quantity" for item in report.json()["issues"]))
+
+    def test_import_upload_api_enforces_authorization_and_csv_type(self):
+        unauthenticated = self.client.post(
+            "/imports/products/preview",
+            content="SKU,Name\nSKU-1,Product\n",
+            headers={"Content-Type": "text/csv"},
+        )
+        self.assertEqual(unauthenticated.status_code, 401)
+
+        unsupported_mime = self.client.post(
+            "/imports/products/preview",
+            content='{"SKU":"SKU-1"}',
+            headers={**self.headers, "Content-Type": "application/json"},
+        )
+        self.assertEqual(unsupported_mime.status_code, 415)
+
+        unsupported_extension = self.client.post(
+            "/imports/products/preview?fileName=products.xlsx",
+            content="SKU,Name\nSKU-1,Product\n",
+            headers={**self.headers, "Content-Type": "text/csv"},
+        )
+        self.assertEqual(unsupported_extension.status_code, 415)
+
+    def test_import_audit_events_and_notifications_are_linked_and_deduplicated(self):
+        suffix = _unique_suffix()
+        preview_response = self._upload_csv(
+            "customers",
+            f"Name,Email,Phone\nEvent Customer,event-{suffix}@example.com,+1-555-{suffix}\n",
+        )
+        self.assertEqual(preview_response.status_code, 200, preview_response.text)
+        batch_id = preview_response.json()["batchId"]
+        completed = self._confirm_import(batch_id)
+        self.assertEqual(completed["status"], "completed")
+
+        db = SessionLocal()
+        try:
+            batch = db.query(ImportBatch).filter(ImportBatch.id == batch_id).first()
+            actor = db.query(User).filter(User.email == batch.importedBy).first()
+            audit_entries = (
+                db.query(AuditLog)
+                .filter(AuditLog.companyId == batch.companyId, AuditLog.resourceId == str(batch_id))
+                .all()
+            )
+            actions = [entry.action for entry in audit_entries]
+            for action in ("File Uploaded", "Import Started", "Import Completed"):
+                matching = [entry for entry in audit_entries if entry.action == action]
+                self.assertEqual(len(matching), 1)
+                self.assertEqual(matching[0].resourceType, "Import")
+                self.assertEqual(matching[0].userId, actor.id)
+                self.assertIsNotNone(matching[0].createdAt)
+                self.assertEqual(matching[0].companyId, batch.companyId)
+            self.assertEqual(len(actions), len(set(actions)))
+
+            notification_keys = [f"import:{batch_id}:started", f"import:{batch_id}:completed"]
+            notifications = db.query(Notification).filter(Notification.alertKey.in_(notification_keys)).all()
+            self.assertEqual(len(notifications), 2)
+            self.assertTrue(all(item.resourceType == "Import" and item.resourceId == str(batch_id) for item in notifications))
+
+            _record_import_event(
+                db,
+                batch,
+                "Import Completed",
+                actor=actor,
+                notification=(
+                    "completed",
+                    "import_completed",
+                    "Import Completed",
+                    f"Import {batch.fileName} (batch {batch.id}) completed successfully with {batch.insertedCount} records processed.",
+                ),
+            )
+            self.assertEqual(
+                db.query(Notification).filter(Notification.alertKey == f"import:{batch_id}:completed").count(),
+                1,
+            )
+            self.assertEqual(
+                db.query(AuditLog).filter(AuditLog.resourceId == str(batch_id), AuditLog.action == "Import Completed").count(),
+                1,
+            )
+        finally:
+            db.close()
+
+    def test_inventory_import_rejects_fractional_stock_quantity(self):
+        suffix = _unique_suffix()
+        category_id = self._create_category()
+        product_response = self.client.post(
+            "/products",
+            headers=self.headers,
+            json={
+                "name": f"Fractional Inventory {suffix}",
+                "sku": f"FRAC-{suffix}",
+                "categoryId": category_id,
+                "brand": "Import Test",
+                "unitPrice": 20,
+                "costPrice": 10,
+                "stockQuantity": 5,
+                "unitOfMeasure": "each",
+            },
+        )
+        self.assertEqual(product_response.status_code, 200, product_response.text)
+
+        response = self._upload_csv("inventory", f"SKU,StockQuantity\nFRAC-{suffix},1.5\n")
+        self.assertEqual(response.status_code, 200, response.text)
+        preview = response.json()
+        self.assertEqual(preview["validRows"], 0)
+        self.assertEqual(preview["invalidRows"], 1)
+        self.assertIn("must be an integer", preview["rows"][0]["messages"][0])
+
+    def test_background_import_persists_progress_across_chunks(self):
+        suffix = _unique_suffix()
+        category_id = self._create_category()
+        rows = ["SKU,Name,CategoryName,Brand,UnitPrice,CostPrice,StockQuantity"]
+        rows.extend(
+            f"BULK-{suffix}-{index},Bulk Product {index},{category_id},BulkBrand,10,5,1"
+            for index in range(205)
+        )
+        preview_response = self._upload_csv("products", "\n".join(rows) + "\n")
+        self.assertEqual(preview_response.status_code, 200, preview_response.text)
+        preview = preview_response.json()
+        self.assertEqual(preview["validRows"], 205)
+
+        completed = self._confirm_import(preview["batchId"])
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(completed["insertedCount"], 205)
+        self.assertEqual(completed["processedCount"], 205)
+        self.assertEqual(completed["progressPercent"], 100)
+
+    def test_queued_import_can_be_cancelled_with_record_reasons(self):
+        suffix = _unique_suffix()
+        preview_response = self._upload_csv(
+            "customers",
+            f"Name,Email,Phone\nQueued Customer,queued-{suffix}@example.com,+1-555-999{suffix[:4]}\n",
+        )
+        self.assertEqual(preview_response.status_code, 200, preview_response.text)
+        batch_id = preview_response.json()["batchId"]
+
+        db = SessionLocal()
+        try:
+            queued, _user_id = enqueue_import(batch_id, db, f"Bearer {self.token}")
+        finally:
+            db.close()
+        self.assertEqual(queued.status, "queued")
+
+        cancel_response = self.client.post(f"/imports/{batch_id}/cancel", headers=self.headers)
+        self.assertEqual(cancel_response.status_code, 200, cancel_response.text)
+        detail_response = self.client.get(f"/imports/{batch_id}", headers=self.headers)
+        detail = detail_response.json()
+        self.assertEqual(detail["status"], "cancelled")
+        self.assertEqual(detail["processedCount"], detail["totalRows"])
+        self.assertEqual(detail["rows"][0]["status"], "cancelled")
+        self.assertIn("cancelled", detail["rows"][0]["message"].lower())
+        db = SessionLocal()
+        try:
+            cancelled_event = db.query(AuditLog).filter(
+                AuditLog.resourceId == str(batch_id),
+                AuditLog.action == "Import Cancelled",
+            ).one()
+            self.assertEqual(cancelled_event.resourceType, "Import")
+        finally:
+            db.close()
+
+    def test_preview_rejects_invalid_headers_and_ragged_rows(self):
+        duplicate_header = self._upload_csv(
+            "inventory",
+            "SKU,StockQuantity,qty\nSKU-1,10,10\n",
+        )
+        self.assertEqual(duplicate_header.status_code, 400)
+        self.assertIn("same field", duplicate_header.json()["detail"])
+
+        unknown_header = self._upload_csv(
+            "inventory",
+            "SKU,StockQuantity,WarehouseCode\nSKU-1,10,WH-1\n",
+        )
+        self.assertEqual(unknown_header.status_code, 400)
+        self.assertIn("Unrecognized column", unknown_header.json()["detail"])
+
+        ragged_row = self._upload_csv(
+            "inventory",
+            "SKU,StockQuantity\nSKU-1,10,unexpected\n",
+        )
+        self.assertEqual(ragged_row.status_code, 200, ragged_row.text)
+        self.assertEqual(ragged_row.json()["invalidRows"], 1)
+        self.assertTrue(
+            any("more values than columns" in message for message in ragged_row.json()["rows"][0]["messages"])
+        )
+
+    def test_preview_rejects_files_over_row_limit_instead_of_truncating(self):
+        rows = "SKU,StockQuantity\n" + "SKU-1,1\n" * 10001
+        response = self._upload_csv("inventory", rows)
+        self.assertEqual(response.status_code, 413, response.text)
+        self.assertIn("more than 10000 data rows", response.json()["detail"])
+
     def test_products_import_accepts_common_currency_and_whitespace_formats(self):
         category_name = f"Electronics-{_unique_suffix()}"
         category = self.client.post(
@@ -47,8 +375,8 @@ class DataImportModuleTests(unittest.TestCase):
 
         csv_text = (
             "SKU,Product Name,Category,Unit Price,Stock Quantity\n"
-            f"SKU001,Laptop,{category_name},₹55,000,20\n"
-            f"SKU002,Wireless Mouse, {category_name} , 1,200 ,100\n"
+            f'SKU001,Laptop,{category_name},"₹55,000",20\n'
+            f'SKU002,Wireless Mouse, {category_name},"1,200",100\n'
         )
 
         response = self._upload_csv("products", csv_text)
@@ -60,7 +388,7 @@ class DataImportModuleTests(unittest.TestCase):
         self.assertEqual(preview["rows"][0]["data"]["categoryId"], category_id)
 
     def test_products_import_accepts_case_and_spacing_variations_for_category_names(self):
-        category_name = "Electronics "
+        category_name = f"Electronics-{_unique_suffix()} "
         category = self.client.post(
             "/categories",
             json={"name": category_name.strip(), "description": "Category name normalization test"},
@@ -70,8 +398,8 @@ class DataImportModuleTests(unittest.TestCase):
 
         csv_text = (
             "SKU,Product Name,Category,Unit Price,Stock Quantity\n"
-            "SKU555,Monitor, electronics , 2999, 12\n"
-            "SKU556,Keyboard,Electronics, 699, 20\n"
+            f"SKU555,Monitor, {category_name.lower()} , 2999, 12\n"
+            f"SKU556,Keyboard,{category_name.upper().strip()}, 699, 20\n"
         )
 
         response = self._upload_csv("products", csv_text)
@@ -117,16 +445,13 @@ class DataImportModuleTests(unittest.TestCase):
         self.assertEqual(preview["invalidRows"], 1)
         self.assertEqual(preview["duplicateRows"], 2)
 
-        confirm_response = self.client.post(f"/imports/{preview['batchId']}/confirm", headers=self.headers)
-        self.assertEqual(confirm_response.status_code, 200, confirm_response.text)
-        confirmed = confirm_response.json()
-        self.assertEqual(confirmed["status"], "completed")
+        confirmed = self._confirm_import(preview["batchId"])
         self.assertEqual(confirmed["insertedCount"], 1)
 
         list_response = self.client.get(f"/products?q={new_sku}", headers=self.headers)
         self.assertEqual(list_response.status_code, 200)
         products = list_response.json()
-        self.assertTrue(any(item["sku"] == new_sku and item["stockQuantity"] == 25 for item in products))
+        self.assertTrue(any(item["sku"].upper() == new_sku.upper() and item["stockQuantity"] == 25 for item in products))
 
         reconfirm = self.client.post(f"/imports/{preview['batchId']}/confirm", headers=self.headers)
         self.assertEqual(reconfirm.status_code, 400)
@@ -180,9 +505,7 @@ class DataImportModuleTests(unittest.TestCase):
         self.assertEqual(preview["invalidRows"], 1)
         self.assertEqual(preview["duplicateRows"], 1)
 
-        confirm_response = self.client.post(f"/imports/{preview['batchId']}/confirm", headers=self.headers)
-        self.assertEqual(confirm_response.status_code, 200, confirm_response.text)
-        confirmed = confirm_response.json()
+        confirmed = self._confirm_import(preview["batchId"])
         self.assertEqual(confirmed["insertedCount"], 1)
 
         list_response = self.client.get(f"/customers?q={new_email}", headers=self.headers)
@@ -238,17 +561,15 @@ class DataImportModuleTests(unittest.TestCase):
         self.assertEqual(preview["validRows"], 2)
         self.assertEqual(preview["invalidRows"], 1)
 
-        confirm_response = self.client.post(f"/imports/{preview['batchId']}/confirm", headers=self.headers)
-        self.assertEqual(confirm_response.status_code, 200, confirm_response.text)
-        confirmed = confirm_response.json()
-        self.assertEqual(confirmed["insertedCount"], 1)
+        confirmed = self._confirm_import(preview["batchId"])
+        self.assertEqual(confirmed["insertedCount"], 2)
         self.assertEqual(confirmed["failedCount"], 0)
 
-        sales_list = self.client.get("/sales/list", headers=self.headers)
+        sales_list = self.client.get("/sales", headers=self.headers)
         self.assertEqual(sales_list.status_code, 200)
         transactions = [
             item
-            for item in sales_list.json().get("transactions", sales_list.json())
+            for item in sales_list.json()
             if isinstance(item, dict) and item.get("invoiceNumber") == invoice
         ]
         self.assertEqual(len(transactions), 1)
@@ -327,15 +648,13 @@ class DataImportModuleTests(unittest.TestCase):
         self.assertIn("no customer found with email", invalid_messages)
         self.assertIn("insufficient stock", invalid_messages)
 
-        confirm_response = self.client.post(f"/imports/{preview['batchId']}/confirm", headers=self.headers)
-        self.assertEqual(confirm_response.status_code, 200, confirm_response.text)
-        confirmed = confirm_response.json()
+        confirmed = self._confirm_import(preview["batchId"])
         self.assertEqual(confirmed["insertedCount"], 2)
         self.assertEqual(confirmed["failedCount"], 0)
 
-        sales_list = self.client.get("/sales/list", headers=self.headers)
+        sales_list = self.client.get("/sales", headers=self.headers)
         self.assertEqual(sales_list.status_code, 200)
-        transactions = sales_list.json().get("transactions", sales_list.json())
+        transactions = sales_list.json()
         imported_invoices = {
             item.get("invoiceNumber")
             for item in transactions
@@ -388,7 +707,7 @@ class DataImportModuleTests(unittest.TestCase):
         self.assertIn("attachment", export_response.headers.get("content-disposition", ""))
         body = export_response.text.lstrip("\ufeff")
         lines = [line for line in body.strip().splitlines() if line]
-        self.assertTrue(lines[0].startswith("RowNumber,Status,Errors,"))
+        self.assertTrue(lines[0].startswith("RowNumber,Status,ErrorType,Errors,"))
         self.assertEqual(len(lines), 3)  # header + 2 problem rows
         self.assertIn("SKU is required", body)
         self.assertIn("Duplicate SKU already exists in system", body)
@@ -421,6 +740,8 @@ class DataImportModuleTests(unittest.TestCase):
         fields = {error["field"] for error in payload["errors"]}
         self.assertIn("SKU", fields)
         self.assertIn("Unit Price", fields)
+        self.assertTrue(all(error["errorType"] == "Validation" for error in payload["errors"]))
+        self.assertTrue(all("name" in error["recordData"] for error in payload["errors"]))
         rows = [error["rowNumber"] for error in payload["errors"]]
         self.assertTrue(all(row > 1 for row in rows))
 
@@ -434,6 +755,48 @@ class DataImportModuleTests(unittest.TestCase):
         analyst_headers = {"Authorization": f"Bearer {analyst_login.json()['access_token']}"}
         forbidden = self.client.get(f"/imports/{preview['batchId']}/errors", headers=analyst_headers)
         self.assertEqual(forbidden.status_code, 403)
+
+    def test_unexpected_processing_errors_are_sanitized(self):
+        category_id = self._create_category()
+        suffix = _unique_suffix()
+        preview_response = self._upload_csv(
+            "products",
+            f"SKU,Name,CategoryName,UnitPrice,StockQuantity\nSAFE-{suffix},Safe Product,{category_id},10,2\n",
+        )
+        self.assertEqual(preview_response.status_code, 200, preview_response.text)
+        batch_id = preview_response.json()["batchId"]
+        secret_detail = "sqlite:///private/path; password=top-secret"
+
+        with patch(
+            "backend.controllers.imports_controller._process_product_records",
+            side_effect=RuntimeError(secret_detail),
+        ):
+            batch = self._confirm_import(batch_id)
+
+        self.assertEqual(batch["status"], "failed")
+        self.assertNotIn("top-secret", batch["failureMessage"])
+        self.assertNotIn("private/path", batch["failureMessage"])
+
+        errors_response = self.client.get(f"/imports/{batch_id}/errors", headers=self.headers)
+        errors = errors_response.json()["errors"]
+        self.assertEqual(errors[0]["errorType"], "Processing")
+        self.assertEqual(errors[0]["recordData"]["name"], "Safe Product")
+        self.assertNotIn("top-secret", errors[0]["message"])
+        db = SessionLocal()
+        try:
+            self.assertEqual(
+                db.query(Notification).filter(Notification.alertKey == f"import:{batch_id}:failed").count(),
+                1,
+            )
+            self.assertEqual(
+                db.query(AuditLog).filter(
+                    AuditLog.resourceId == str(batch_id),
+                    AuditLog.action == "Import Failed",
+                ).count(),
+                1,
+            )
+        finally:
+            db.close()
 
     def test_import_history_completed_with_errors_status(self):
         category_id = self._create_category()
@@ -476,9 +839,7 @@ class DataImportModuleTests(unittest.TestCase):
         preview = preview_response.json()
         self.assertEqual(preview["validRows"], 1)
 
-        confirm_response = self.client.post(f"/imports/{preview['batchId']}/confirm", headers=self.headers)
-        self.assertEqual(confirm_response.status_code, 200, confirm_response.text)
-        confirmed = confirm_response.json()
+        confirmed = self._confirm_import(preview["batchId"])
         self.assertEqual(confirmed["status"], "completed_with_errors")
         self.assertEqual(confirmed["insertedCount"], 0)
         self.assertEqual(confirmed["failedCount"], 1)
@@ -493,6 +854,16 @@ class DataImportModuleTests(unittest.TestCase):
         batch_entry = next((item for item in history_response.json() if item["id"] == preview["batchId"]), None)
         self.assertIsNotNone(batch_entry)
         self.assertEqual(batch_entry["status"], "completed_with_errors")
+        db = SessionLocal()
+        try:
+            self.assertEqual(
+                db.query(Notification).filter(
+                    Notification.alertKey == f"import:{preview['batchId']}:completed-with-errors"
+                ).count(),
+                1,
+            )
+        finally:
+            db.close()
 
     def test_confirm_with_no_valid_rows_completes_cleanly(self):
         existing_email = f"novale-{_unique_suffix()}@example.com"
@@ -518,9 +889,7 @@ class DataImportModuleTests(unittest.TestCase):
         preview = preview_response.json()
         self.assertEqual(preview["validRows"], 0)
 
-        confirm_response = self.client.post(f"/imports/{preview['batchId']}/confirm", headers=self.headers)
-        self.assertEqual(confirm_response.status_code, 200, confirm_response.text)
-        confirmed = confirm_response.json()
+        confirmed = self._confirm_import(preview["batchId"])
         self.assertEqual(confirmed["status"], "completed")
         self.assertEqual(confirmed["insertedCount"], 0)
         self.assertEqual(confirmed["failedCount"], 0)
@@ -619,9 +988,8 @@ class DataImportModuleTests(unittest.TestCase):
         first_payload = first_upload.json()
         self.assertEqual(first_payload["validRows"], 1)
         self.assertEqual(first_payload["duplicateRows"], 0)
-        confirm_response = self.client.post(f"/imports/{first_payload['batchId']}/confirm", headers=self.headers)
-        self.assertEqual(confirm_response.status_code, 200, confirm_response.text)
-        self.assertEqual(confirm_response.json()["insertedCount"], 1)
+        confirmed = self._confirm_import(first_payload["batchId"])
+        self.assertEqual(confirmed["insertedCount"], 1)
 
         second_upload = self._upload_csv(
             "sales", sales_header + f"{invoice},{sales_email},{sku},4,10,2026-01-16,Cash,Paid\n"

@@ -318,12 +318,29 @@ def ensure_schema() -> None:
                 insertedCount INTEGER DEFAULT 0,
                 updatedCount INTEGER DEFAULT 0,
                 failedCount INTEGER DEFAULT 0,
-                status VARCHAR DEFAULT 'pending',
+                processedCount INTEGER DEFAULT 0,
+                cancelRequested INTEGER DEFAULT 0,
+                failureMessage TEXT,
+                status VARCHAR DEFAULT 'uploaded',
                 importedBy VARCHAR,
                 createdAt DATETIME,
-                completedAt DATETIME
+                startedAt DATETIME,
+                completedAt DATETIME,
+                durationSeconds FLOAT
             )
         """))
+        import_batch_columns = {column["name"] for column in inspect(connection).get_columns("import_batches")}
+        if "processedCount" not in import_batch_columns:
+            connection.execute(text("ALTER TABLE import_batches ADD COLUMN processedCount INTEGER DEFAULT 0"))
+        if "cancelRequested" not in import_batch_columns:
+            connection.execute(text("ALTER TABLE import_batches ADD COLUMN cancelRequested INTEGER DEFAULT 0"))
+        if "failureMessage" not in import_batch_columns:
+            connection.execute(text("ALTER TABLE import_batches ADD COLUMN failureMessage TEXT"))
+        if "startedAt" not in import_batch_columns:
+            connection.execute(text("ALTER TABLE import_batches ADD COLUMN startedAt DATETIME"))
+        if "durationSeconds" not in import_batch_columns:
+            connection.execute(text("ALTER TABLE import_batches ADD COLUMN durationSeconds FLOAT"))
+        connection.execute(text("UPDATE import_batches SET status = 'uploaded' WHERE status = 'pending'"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_import_batches_companyId ON import_batches(companyId)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_import_batches_entityType ON import_batches(entityType)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_import_batches_status ON import_batches(status)"))

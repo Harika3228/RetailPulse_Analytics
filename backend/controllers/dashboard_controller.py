@@ -1,6 +1,7 @@
 import csv
 import io
 import json
+import logging
 from datetime import datetime, time, timezone
 
 from sqlalchemy import and_, desc, or_
@@ -359,6 +360,37 @@ def data_quality_report(
         raise
 
 
+def run_import_data_quality_reconciliation(db: DbDependency, user) -> DataQualityResponse:
+    execution = ReconciliationExecution(
+        companyId=user.companyId,
+        triggeredByUserId=user.id,
+        status="running",
+        startedAt=datetime.now(timezone.utc),
+    )
+    db.add(execution)
+    db.commit()
+    try:
+        result = _run_data_quality_report(db, user_override=user)
+        execution.completedAt = datetime.now(timezone.utc)
+        execution.recordsChecked = result.totalRecordsChecked
+        execution.issuesDetected = result.errorRecords + result.warningRecords
+        execution.issuesResolved = sum(1 for issue in result.issues if issue.status == "resolved")
+        execution.status = "completed_with_issues" if result.unresolvedIssues else "completed"
+        db.commit()
+        return result
+    except Exception as error:
+        db.rollback()
+        execution = db.query(ReconciliationExecution).filter(ReconciliationExecution.id == execution.id).first()
+        if execution:
+            execution.completedAt = datetime.now(timezone.utc)
+            execution.status = "failed"
+            execution.failedChecks = 1
+            execution.errorMessage = "Reconciliation failed after an import. Check server logs for details."
+            db.commit()
+        logging.exception("Data quality reconciliation failed after import batch processing")
+        raise RuntimeError("Post-import data quality reconciliation failed.") from error
+
+
 def _run_data_quality_report(
     db: DbDependency,
     authorization: str | None = None,
@@ -369,10 +401,14 @@ def _run_data_quality_report(
     status: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    user_override=None,
 ) -> DataQualityResponse:
-    if authorization is None or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing token")
-    user = get_current_user(db, authorization.split(" ", 1)[1])
+    if user_override is None:
+        if authorization is None or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing token")
+        user = get_current_user(db, authorization.split(" ", 1)[1])
+    else:
+        user = user_override
     _ensure_admin(user)
 
     issues: list[DataQualityIssue] = []

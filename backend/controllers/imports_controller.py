@@ -1,6 +1,7 @@
 import csv
 import io
 import json
+import logging
 import re
 from datetime import datetime, timezone
 
@@ -15,7 +16,8 @@ from backend.controllers.customers_controller import (
     _normalize_phone,
     refresh_customer_metrics_for_company,
 )
-from backend.database import DbDependency
+from backend.controllers.dashboard_controller import run_import_data_quality_reconciliation
+from backend.database import DbDependency, SessionLocal
 from backend.helpers import (
     _apply_sales_stock_delta,
     _ensure_admin,
@@ -25,13 +27,18 @@ from backend.helpers import (
     create_notification,
 )
 from backend.models import (
+    AuditLog,
     Category,
     Customer,
     ImportBatch,
     ImportRecord,
+    Notification,
     Product,
     SalesTransaction,
     SalesTransactionLine,
+    StockAdjustment,
+    StockMovement,
+    User,
 )
 from backend.schemas import (
     ImportBatchDetailResponse,
@@ -76,14 +83,74 @@ from backend.schemas import (
 #   counters are never persisted ahead of (or without) the sales they summarise.
 # ---------------------------------------------------------------------------
 
-MAX_IMPORT_ROWS = 2000
-MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024  # 10 MB
+MAX_IMPORT_ROWS = 10000
+MAX_IMPORT_FILE_BYTES = 25 * 1024 * 1024  # 25 MB
+IMPORT_CHUNK_SIZE = 100
 EMAIL_PATTERN = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
 SKU_PATTERN = r"[A-Z0-9-]+"
 
-ENTITY_TYPES = {"products", "customers", "sales"}
+ENTITY_TYPES = {"products", "inventory", "customers", "sales"}
+
+
+def _record_import_event(
+    db: DbDependency,
+    batch: ImportBatch,
+    action: str,
+    *,
+    actor=None,
+    audit_status: str = "success",
+    notification: tuple[str, str, str, str] | None = None,
+) -> None:
+    actor_email = actor.email if actor else batch.importedBy or "system"
+    actor_id = actor.id if actor else None
+    resource_id = str(batch.id)
+    audit_exists = db.query(AuditLog.id).filter(
+        AuditLog.companyId == batch.companyId,
+        AuditLog.resourceType == "Import",
+        AuditLog.resourceId == resource_id,
+        AuditLog.action == action,
+    ).first()
+    if not audit_exists:
+        create_audit_log(
+            db,
+            company=str(batch.companyId),
+            company_id=batch.companyId,
+            user=actor_email,
+            user_id=actor_id,
+            action=action,
+            entity_name=batch.fileName,
+            resource_type="Import",
+            resource_id=batch.id,
+            description=f"{action} for import batch {batch.id} ({batch.fileName}).",
+            status=audit_status,
+            commit=False,
+        )
+
+    if notification:
+        event_key, notification_type, title, message = notification
+        alert_key = f"import:{batch.id}:{event_key}"
+        exists = db.query(Notification.id).filter(Notification.alertKey == alert_key).first()
+        if not exists:
+            create_notification(
+                db,
+                batch.companyId,
+                message=message,
+                notification_type=notification_type,
+                target_role="admin",
+                severity={"import_started": "info", "import_completed": "success", "import_completed_with_errors": "warning", "import_failed": "error"}.get(notification_type, "info"),
+                title=title,
+                resource_type="Import",
+                resource_id=batch.id,
+                alert_key=alert_key,
+            )
+    db.commit()
 
 FIELD_ALIASES = {
+    "inventory": {
+        "sku": {"sku", "skucode", "productcode", "itemcode"},
+        "stockquantity": {"stockquantity", "stock", "quantity", "qty", "countedstock"},
+        "reason": {"reason", "adjustmentreason", "notes"},
+    },
     "products": {
         "sku": {"sku", "skucode", "productcode", "itemcode"},
         "name": {"name", "productname", "product"},
@@ -133,6 +200,7 @@ FIELD_ALIASES = {
 # Each entry is a list of column groups; every group must have at least one
 # recognized column present in the uploaded file for the import to proceed.
 REQUIRED_COLUMN_GROUPS = {
+    "inventory": ({"sku"}, {"stockquantity"}),
     "products": ({"sku"}, {"name"}, {"unitprice"}, {"stockquantity"}, {"categoryid", "categoryname"}),
     "customers": ({"name"}, {"email"}, {"phone"}),
     "sales": (
@@ -145,6 +213,7 @@ REQUIRED_COLUMN_GROUPS = {
 }
 
 REQUIRED_COLUMN_LABELS = {
+    "inventory": {"sku": "SKU", "stockquantity": "Stock Quantity"},
     "products": {
         "sku": "SKU",
         "name": "Product Name",
@@ -188,12 +257,16 @@ def _authorize_admin(db: DbDependency, authorization: str | None):
     return user, company
 
 
+def authorize_import_admin(db: DbDependency, authorization: str | None):
+    return _authorize_admin(db, authorization)
+
+
 def normalize_entity_type(entity_type: str | None) -> str:
     normalized = (entity_type or "").strip().lower()
     if normalized in ("product", "customer", "sale"):
         normalized += "s"
     if normalized not in ENTITY_TYPES:
-        raise HTTPException(status_code=400, detail="Entity type must be 'products', 'customers', or 'sales'")
+        raise HTTPException(status_code=400, detail="Entity type must be 'products', 'inventory', 'customers', or 'sales'")
     return normalized
 
 
@@ -228,12 +301,35 @@ def _map_headers(fieldnames: list[str], entity_type: str) -> dict[str, str]:
 
 def parse_csv_rows(raw: bytes, entity_type: str) -> tuple[list[dict[str, str]], list[str]]:
     text = _decode_csv(raw)
-    reader = csv.DictReader(io.StringIO(text))
+    try:
+        dialect = csv.Sniffer().sniff(text[:8192], delimiters=",;\t")
+    except csv.Error:
+        dialect = csv.excel
+    reader = csv.DictReader(io.StringIO(text), dialect=dialect, strict=True)
     fieldnames = list(reader.fieldnames or [])
     if not fieldnames:
         raise HTTPException(status_code=400, detail="The CSV file appears to be empty")
+    if any(not header or not header.strip() for header in fieldnames):
+        raise HTTPException(status_code=400, detail="CSV column names cannot be blank")
+
+    normalized_headers = [_normalize_header(header) for header in fieldnames]
+    if len(normalized_headers) != len(set(normalized_headers)):
+        raise HTTPException(status_code=400, detail="CSV contains duplicate column names. Keep only one copy of each column.")
 
     mapping = _map_headers(fieldnames, entity_type)
+    mapped_fields = list(mapping.values())
+    if len(mapped_fields) != len(set(mapped_fields)):
+        duplicates = sorted({field for field in mapped_fields if mapped_fields.count(field) > 1})
+        labels = REQUIRED_COLUMN_LABELS[entity_type]
+        duplicate_labels = ", ".join(labels.get(field, field) for field in duplicates)
+        raise HTTPException(status_code=400, detail=f"Multiple CSV columns map to the same field: {duplicate_labels}.")
+    unknown_headers = [header for header in fieldnames if header not in mapping]
+    if unknown_headers:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unrecognized column name(s): {', '.join(unknown_headers)}. Rename or remove these columns and try again.",
+        )
+
     recognized = set(mapping.values())
     missing_groups = [group for group in REQUIRED_COLUMN_GROUPS[entity_type] if not group.intersection(recognized)]
     if missing_groups:
@@ -245,26 +341,44 @@ def parse_csv_rows(raw: bytes, entity_type: str) -> tuple[list[dict[str, str]], 
         raise HTTPException(status_code=400, detail=f"CSV is missing required column(s): {described}")
 
     rows: list[dict[str, str]] = []
-    for line_number, raw_row in enumerate(reader, start=2):
-        if raw_row is None:
-            continue
-        values = [value for value in raw_row.values() if value is not None]
-        if all(str(value).strip() == "" for value in values):
-            continue
-        row_data = {
-            mapping[key]: (str(value).strip() if value is not None else "")
-            for key, value in raw_row.items()
-            if key in mapping
-        }
-        row_data["__raw__"] = {
-            str(key): (str(value) if value is not None else "")
-            for key, value in raw_row.items()
-            if key is not None
-        }
-        row_data["__line__"] = str(line_number)
-        rows.append(row_data)
-        if len(rows) >= MAX_IMPORT_ROWS:
-            break
+    try:
+        for raw_row in reader:
+            line_number = reader.line_num
+            if raw_row is None:
+                continue
+            row_errors: list[str] = []
+            if None in raw_row:
+                row_errors.append(
+                    f"Row has more values than columns near line {line_number}. Check the delimiter and quoting."
+                )
+            if any(value is None for value in raw_row.values()):
+                row_errors.append(f"Row has fewer values than columns near line {line_number}.")
+            values = [value for key, value in raw_row.items() if key is not None]
+            if all(str(value).strip() == "" for value in values):
+                continue
+            row_data = {
+                mapping[key]: str(value).strip() if value is not None else ""
+                for key, value in raw_row.items()
+                if key in mapping
+            }
+            row_data["__raw__"] = {
+                str(key): str(value) if value is not None else ""
+                for key, value in raw_row.items()
+                if key is not None
+            }
+            row_data["__line__"] = str(line_number)
+            row_data["__errors__"] = row_errors
+            rows.append(row_data)
+            if len(rows) > MAX_IMPORT_ROWS:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"The CSV contains more than {MAX_IMPORT_ROWS} data rows. Split it into smaller files and try again.",
+                )
+    except csv.Error as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid CSV format near line {reader.line_num}: {error}",
+        ) from error
 
     if not rows:
         raise HTTPException(status_code=400, detail="The CSV file contains no data rows")
@@ -312,7 +426,7 @@ def _to_float(value: str) -> float | None:
 
 def _to_int(value: str) -> int | None:
     parsed = _to_float(value)
-    if parsed is None:
+    if parsed is None or not parsed.is_integer():
         return None
     return int(parsed)
 
@@ -353,6 +467,28 @@ def _normalize_category_key(value: str) -> str:
 # Per-entity row validation
 # ---------------------------------------------------------------------------
 
+def _validate_inventory_row(row: dict[str, str], product_index: dict[str, tuple[int, float, int]], seen_skus: set[str]) -> tuple[dict, list[str], bool]:
+    messages: list[str] = []
+    sku = _normalize_sku_cell(_cell(row, "sku"))
+    quantity = _to_int(_cell(row, "stockquantity"))
+    duplicate = False
+    if not sku:
+        messages.append("SKU is required")
+    elif f"sku:{sku}" not in product_index:
+        messages.append(f"Product not found for SKU: {sku}")
+    elif sku in seen_skus:
+        duplicate = True
+        messages.append(f"Duplicate SKU within file: {sku}")
+    if sku:
+        seen_skus.add(sku)
+    if quantity is None:
+        messages.append("Stock quantity is required and must be an integer")
+    elif quantity < 0:
+        messages.append("Stock quantity cannot be negative")
+    current_quantity = product_index.get(f"sku:{sku}", (0, 0.0, 0))[2] if sku else 0
+    return {"sku": sku, "productId": product_index.get(f"sku:{sku}", (None, 0.0, 0))[0], "currentQuantity": current_quantity, "stockQuantity": quantity, "reason": _cell(row, "reason") or "Inventory import"}, messages, duplicate
+
+
 def _validate_product_row(
     row: dict[str, str],
     category_index: dict[str, int],
@@ -386,6 +522,7 @@ def _validate_product_row(
 
     stock_quantity = _to_int(_cell(row, "stockquantity"))
     if stock_quantity is None:
+        messages.append("Stock quantity is required and must be a whole number")
         stock_quantity = 0
     elif stock_quantity < 0:
         messages.append("Stock quantity cannot be negative")
@@ -672,6 +809,12 @@ def create_import_preview(
     user, _company = _authorize_admin(db, authorization)
     entity_type = normalize_entity_type(entity_type_raw)
 
+    safe_file_name = (file_name or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if safe_file_name and not safe_file_name.lower().endswith(".csv"):
+        raise HTTPException(status_code=415, detail="Unsupported file type. Only CSV files are accepted.")
+    if len(safe_file_name) > 255:
+        raise HTTPException(status_code=400, detail="File name must be 255 characters or fewer.")
+
     if len(raw or b"") > MAX_IMPORT_FILE_BYTES:
         raise HTTPException(
             status_code=413,
@@ -695,6 +838,7 @@ def create_import_preview(
         seen_skus: set[str] = set()
         for row in rows:
             resolved, messages, duplicate = _validate_product_row(row, category_index, existing_skus, seen_skus)
+            messages.extend(row.get("__errors__", []))
             status = "duplicate" if duplicate else ("invalid" if messages else "valid")
             valid_count += status == "valid"
             invalid_count += status == "invalid"
@@ -708,12 +852,24 @@ def create_import_preview(
                     rawData=dict(row.get("__raw__") or {}),
                 )
             )
+    elif entity_type == "inventory":
+        product_index = _build_product_index(db, user.companyId)
+        seen_skus: set[str] = set()
+        for row in rows:
+            resolved, messages, duplicate = _validate_inventory_row(row, product_index, seen_skus)
+            messages.extend(row.get("__errors__", []))
+            status = "duplicate" if duplicate else ("invalid" if messages else "valid")
+            valid_count += status == "valid"
+            invalid_count += status == "invalid"
+            duplicate_count += status == "duplicate"
+            preview_rows.append(ImportPreviewRow(rowNumber=int(row.get("__line__") or 0), status=status, messages=messages, data=resolved, rawData=dict(row.get("__raw__") or {})))
     elif entity_type == "customers":
         existing_emails, existing_phones = _existing_customer_keys(db, user.companyId)
         seen_emails: set[str] = set()
         seen_phones: set[str] = set()
         for row in rows:
             resolved, messages, duplicate = _validate_customer_row(row, existing_emails, existing_phones, seen_emails, seen_phones)
+            messages.extend(row.get("__errors__", []))
             status = "duplicate" if duplicate else ("invalid" if messages else "valid")
             valid_count += status == "valid"
             invalid_count += status == "invalid"
@@ -740,6 +896,7 @@ def create_import_preview(
         allocated_stock: dict[str, int] = {}
         for row in rows:
             resolved, messages, duplicate = _validate_sales_row(row, product_index, customer_index, existing_invoices, allocated_stock)
+            messages.extend(row.get("__errors__", []))
             status = "duplicate" if duplicate else ("invalid" if messages else "valid")
             valid_count += status == "valid"
             invalid_count += status == "invalid"
@@ -757,7 +914,7 @@ def create_import_preview(
     batch = ImportBatch(
         companyId=user.companyId,
         entityType=entity_type,
-        fileName=file_name or f"{entity_type}.csv",
+        fileName=safe_file_name or f"{entity_type}.csv",
         totalRows=len(rows),
         validCount=valid_count,
         invalidCount=invalid_count,
@@ -765,7 +922,9 @@ def create_import_preview(
         insertedCount=0,
         updatedCount=0,
         failedCount=0,
-        status="pending",
+        status="uploaded",
+        processedCount=0,
+        cancelRequested=0,
         importedBy=user.email,
         createdAt=datetime.now(timezone.utc),
     )
@@ -787,15 +946,7 @@ def create_import_preview(
     db.add_all(records)
     db.commit()
 
-    create_audit_log(
-        db,
-        company=str(user.companyId),
-        user=user.email,
-        action=f"Data Import Preview:{entity_type}",
-        entity_name=batch.fileName,
-        ip_address="Unknown",
-        browser="Unknown",
-    )
+    _record_import_event(db, batch, "File Uploaded", actor=user)
     return ImportPreviewResponse(
         batchId=batch.id,
         entityType=entity_type,
@@ -814,11 +965,156 @@ def create_import_preview(
 # Confirm (preview -> import processing -> database)
 # ---------------------------------------------------------------------------
 
+def enqueue_import(batch_id: int, db: DbDependency, authorization: str | None = None) -> tuple[ImportConfirmResponse, int]:
+    user, _company = _authorize_admin(db, authorization)
+    batch = db.query(ImportBatch).filter(
+        ImportBatch.id == batch_id,
+        ImportBatch.companyId == user.companyId,
+    ).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+    if batch.status not in ("uploaded", "pending"):
+        raise HTTPException(status_code=400, detail=f"Import batch has already been {batch.status}")
+
+    batch.status = "queued"
+    batch.processedCount = 0
+    batch.cancelRequested = 0
+    batch.failureMessage = None
+    batch.startedAt = None
+    batch.completedAt = None
+    batch.durationSeconds = None
+    db.commit()
+    response = ImportConfirmResponse(
+        batchId=batch.id,
+        entityType=batch.entityType,
+        fileName=batch.fileName,
+        status=batch.status,
+        totalRows=batch.totalRows,
+        insertedCount=0,
+        updatedCount=0,
+        failedCount=0,
+        invalidCount=batch.invalidCount,
+        duplicateCount=batch.duplicateCount,
+        skippedCount=batch.invalidCount + batch.duplicateCount,
+        processedCount=0,
+        progressPercent=0,
+        importedBy=batch.importedBy,
+        createdAt=batch.createdAt.isoformat() if batch.createdAt else None,
+    )
+    return response, user.id
+
+
+def _finish_import_batch(batch: ImportBatch, status: str) -> None:
+    batch.status = status
+    batch.completedAt = datetime.now(timezone.utc)
+    started_at = batch.startedAt
+    if started_at and started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    batch.durationSeconds = (
+        round(max(0.0, (batch.completedAt - started_at).total_seconds()), 3)
+        if started_at
+        else 0.0
+    )
+
+
+def run_import_job(batch_id: int, user_id: int) -> None:
+    db = SessionLocal()
+    user = None
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        batch = db.query(ImportBatch).filter(ImportBatch.id == batch_id).first()
+        if not batch or batch.status != "queued":
+            return
+        if not user:
+            _finish_import_batch(batch, "failed")
+            batch.failureMessage = "The user who started this import is no longer available."
+            remaining = (
+                db.query(ImportRecord)
+                .filter(ImportRecord.batchId == batch.id, ImportRecord.status == "valid")
+                .all()
+            )
+            for record in remaining:
+                record.status = "failed"
+                record.message = batch.failureMessage
+            batch.failedCount = len(remaining)
+            batch.processedCount = int(batch.totalRows or 0)
+            db.commit()
+            _record_import_event(
+                db,
+                batch,
+                "Import Failed",
+                audit_status="failure",
+                notification=("failed", "import_failed", "Import Failed", f"Import batch {batch.id} failed to start."),
+            )
+            return
+        company = get_company_for_user(db, user)
+        confirm_import(batch_id, db, user, company)
+    except Exception:
+        db.rollback()
+        batch = db.query(ImportBatch).filter(ImportBatch.id == batch_id).first()
+        if batch and batch.status in ("queued", "processing"):
+            remaining = (
+                db.query(ImportRecord)
+                .filter(ImportRecord.batchId == batch_id, ImportRecord.status == "valid")
+                .all()
+            )
+            for record in remaining:
+                record.status = "failed"
+                record.message = "An unexpected error interrupted the import. Contact support with the batch ID."
+            batch.failedCount = int(batch.failedCount or 0) + len(remaining)
+            batch.processedCount = int(batch.totalRows or 0)
+            batch.failureMessage = "An unexpected error interrupted the import. Contact support with the batch ID."
+            _finish_import_batch(batch, "failed")
+            db.commit()
+            _record_import_event(
+                db,
+                batch,
+                "Import Failed",
+                actor=user,
+                audit_status="failure",
+                notification=("failed", "import_failed", "Import Failed", f"Import batch {batch.id} failed due to an unexpected error."),
+            )
+        logging.exception("Background import job %s failed", batch_id)
+    finally:
+        db.close()
+
+
+def cancel_import_batch(batch_id: int, db: DbDependency, authorization: str | None = None) -> dict:
+    user, _company = _authorize_admin(db, authorization)
+    batch = db.query(ImportBatch).filter(
+        ImportBatch.id == batch_id,
+        ImportBatch.companyId == user.companyId,
+    ).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+    if batch.status == "queued":
+        remaining = (
+            db.query(ImportRecord)
+            .filter(ImportRecord.batchId == batch.id, ImportRecord.status == "valid")
+            .all()
+        )
+        for record in remaining:
+            record.status = "cancelled"
+            record.message = "Import was cancelled before processing started."
+        batch.status = "cancelled"
+        batch.cancelRequested = 1
+        batch.processedCount = int(batch.totalRows or 0)
+        _finish_import_batch(batch, "cancelled")
+        db.commit()
+        _record_import_event(db, batch, "Import Cancelled", actor=user)
+        return {"batchId": batch.id, "status": batch.status, "message": "Import cancelled."}
+    if batch.status == "processing":
+        batch.cancelRequested = 1
+        db.commit()
+        return {"batchId": batch.id, "status": batch.status, "message": "Cancellation requested; the current chunk will finish first."}
+    raise HTTPException(status_code=400, detail=f"Import batch cannot be cancelled while {batch.status}")
+
+
 def _load_pending_batch(db: DbDependency, user, batch_id: int) -> ImportBatch:
     batch = db.query(ImportBatch).filter(ImportBatch.id == batch_id, ImportBatch.companyId == user.companyId).first()
     if not batch:
         raise HTTPException(status_code=404, detail="Import batch not found")
-    if batch.status != "pending":
+    if batch.status != "queued":
         raise HTTPException(status_code=400, detail=f"Import batch has already been {batch.status}")
     return batch
 
@@ -858,6 +1154,42 @@ def _process_product_records(db: DbDependency, user, records: list[ImportRecord]
             record.message = "SKU already exists"
             failed += 1
     return inserted, failed
+
+
+def _process_inventory_records(db: DbDependency, user, records: list[ImportRecord]) -> tuple[int, int]:
+    processed = 0
+    failed = 0
+    now = datetime.now(timezone.utc)
+    for record in records:
+        resolved = json.loads(record.rowData).get("resolved", {})
+        product = db.query(Product).filter(Product.id == resolved.get("productId"), Product.companyId == user.companyId).first()
+        if not product:
+            record.status = "failed"
+            record.message = "Product no longer exists in this company"
+            failed += 1
+            continue
+        previous = int(product.stockQuantity if product.stockQuantity is not None else product.initialStockQuantity or 0)
+        updated = int(resolved["stockQuantity"])
+        difference = updated - previous
+        try:
+            with db.begin_nested():
+                product.stockQuantity = updated
+                product.initialStockQuantity = updated if product.initialStockQuantity is None else product.initialStockQuantity
+                product.updatedAt = now
+                if difference:
+                    adjustment = StockAdjustment(companyId=user.companyId, productId=product.id, adjustmentType="manual_adjustment", quantity=abs(difference), reason=resolved.get("reason") or "Inventory import", remarks=f"CSV inventory import batch row {record.rowNumber}", adjustedBy=user.email, adjustedByUserId=user.id, adjustmentDate=now, createdAt=now)
+                    movement = StockMovement(companyId=user.companyId, productId=product.id, productName=product.name or "", sku=product.sku or "", movementType="Inventory Import", previousQuantity=previous, updatedQuantity=updated, quantityChanged=difference, reference=f"Import batch row {record.rowNumber}", actor=user.email, actorUserId=user.id, createdAt=now)
+                    db.add_all([adjustment, movement])
+                db.flush()
+            record.status = "imported"
+            record.message = None
+            processed += 1
+        except Exception as error:
+            record.status = "failed"
+            logging.exception("Inventory import row %s failed", record.rowNumber)
+            record.message = "Inventory stock update failed due to a database error."
+            failed += 1
+    return processed, failed
 
 
 def _process_customer_records(db: DbDependency, user, records: list[ImportRecord]) -> tuple[int, int]:
@@ -1116,7 +1448,7 @@ def _process_sales_records(db: DbDependency, user, company, records: list[Import
             for record in group_records:
                 record.status = "imported"
                 record.message = None
-            inserted += 1
+            inserted += len(group_records)
         except (HTTPException, ValueError) as exc:
             detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
             for record in group_records:
@@ -1127,10 +1459,63 @@ def _process_sales_records(db: DbDependency, user, company, records: list[Import
     return inserted, failed
 
 
-def confirm_import(batch_id: int, db: DbDependency, authorization: str | None = None) -> ImportConfirmResponse:
-    user, company = _authorize_admin(db, authorization)
-    batch = _load_pending_batch(db, user, batch_id)
+def _record_chunks(entity_type: str, records: list[ImportRecord]):
+    if entity_type != "sales":
+        for start in range(0, len(records), IMPORT_CHUNK_SIZE):
+            yield records[start : start + IMPORT_CHUNK_SIZE]
+        return
 
+    invoice_groups: dict[str, list[ImportRecord]] = {}
+    for record in records:
+        resolved = json.loads(record.rowData).get("resolved", {})
+        invoice = (resolved.get("invoiceNumber") or "").strip()
+        invoice_groups.setdefault(invoice or f"__auto__{record.id}", []).append(record)
+
+    chunk: list[ImportRecord] = []
+    for group in invoice_groups.values():
+        if chunk and len(chunk) + len(group) > IMPORT_CHUNK_SIZE:
+            yield chunk
+            chunk = []
+        chunk.extend(group)
+    if chunk:
+        yield chunk
+
+
+def _confirm_response(batch: ImportBatch) -> ImportConfirmResponse:
+    total = int(batch.totalRows or 0)
+    processed = int(batch.processedCount or 0)
+    progress = 100 if total == 0 else min(100, round(processed * 100 / total))
+    return ImportConfirmResponse(
+        batchId=batch.id,
+        entityType=batch.entityType,
+        fileName=batch.fileName,
+        status=batch.status,
+        totalRows=total,
+        insertedCount=int(batch.insertedCount or 0),
+        updatedCount=int(batch.updatedCount or 0),
+        failedCount=int(batch.failedCount or 0),
+        invalidCount=int(batch.invalidCount or 0),
+        duplicateCount=int(batch.duplicateCount or 0),
+        skippedCount=int(batch.invalidCount or 0) + int(batch.duplicateCount or 0),
+        processedCount=processed,
+        progressPercent=progress,
+        importedBy=batch.importedBy,
+        createdAt=batch.createdAt.isoformat() if batch.createdAt else None,
+        startedAt=batch.startedAt.isoformat() if batch.startedAt else None,
+        completedAt=batch.completedAt.isoformat() if batch.completedAt else None,
+        durationSeconds=float(batch.durationSeconds or 0) if batch.completedAt else None,
+    )
+
+
+def _reconcile_import_changes(db: DbDependency, user, batch_id: int) -> None:
+    try:
+        run_import_data_quality_reconciliation(db, user)
+    except Exception:
+        logging.exception("Post-import data quality reconciliation failed for batch %s", batch_id)
+
+
+def confirm_import(batch_id: int, db: DbDependency, user, company) -> ImportConfirmResponse:
+    batch = _load_pending_batch(db, user, batch_id)
     records = (
         db.query(ImportRecord)
         .filter(ImportRecord.batchId == batch.id)
@@ -1140,79 +1525,127 @@ def confirm_import(batch_id: int, db: DbDependency, authorization: str | None = 
     valid_records = [record for record in records if record.status == "valid"]
 
     batch.status = "processing"
+    batch.startedAt = datetime.now(timezone.utc)
+    batch.processedCount = int(batch.invalidCount or 0) + int(batch.duplicateCount or 0)
+    batch.insertedCount = 0
+    batch.failedCount = 0
     db.commit()
+    _record_import_event(
+        db,
+        batch,
+        "Import Started",
+        actor=user,
+        notification=(
+            "started",
+            "import_started",
+            "Import Processing Started",
+            f"Import {batch.fileName} (batch {batch.id}) has started processing.",
+        ),
+    )
 
-    try:
-        inserted = 0
-        failed = 0
-        if batch.entityType == "products":
-            inserted, failed = _process_product_records(db, user, valid_records)
-            invalidate_forecast_cache(user.companyId)
-        elif batch.entityType == "customers":
-            inserted, failed = _process_customer_records(db, user, valid_records)
-        else:
-            inserted, failed = _process_sales_records(db, user, company, valid_records)
-            invalidate_forecast_cache(user.companyId)
-    except Exception:
-        # Roll back every record/group inserted so far so an unexpected failure
-        # never leaves a half-imported batch (no orphaned products, sales, or
-        # stock deltas). The batch is then marked failed and that status is
-        # committed. Its records remain as they were at validation time.
-        db.rollback()
-        batch.status = "failed"
-        batch.completedAt = datetime.now(timezone.utc)
-        db.commit()
-        create_notification(
-            db, user.companyId, message=f"Import failed for {batch.fileName}.",
-            notification_type="import_failed", severity="error", target_role="admin",
-        )
-        db.commit()
-        raise
+    inserted = 0
+    failed = 0
+    for chunk in _record_chunks(batch.entityType, valid_records):
+        db.refresh(batch)
+        if batch.cancelRequested:
+            remaining = (
+                db.query(ImportRecord)
+                .filter(ImportRecord.batchId == batch.id, ImportRecord.status == "valid")
+                .all()
+            )
+            for record in remaining:
+                record.status = "cancelled"
+                record.message = "Import was cancelled before this record was processed."
+            if inserted:
+                _reconcile_import_changes(db, user, batch.id)
+            batch.processedCount = int(batch.totalRows or 0)
+            _finish_import_batch(batch, "cancelled")
+            db.commit()
+            _record_import_event(db, batch, "Import Cancelled", actor=user)
+            return _confirm_response(batch)
 
-    batch.status = "completed_with_errors" if failed > 0 else "completed"
-    batch.insertedCount = inserted
-    batch.failedCount = failed
-    batch.completedAt = datetime.now(timezone.utc)
-    db.commit()
+        try:
+            if batch.entityType == "products":
+                chunk_inserted, chunk_failed = _process_product_records(db, user, chunk)
+            elif batch.entityType == "inventory":
+                chunk_inserted, chunk_failed = _process_inventory_records(db, user, chunk)
+            elif batch.entityType == "customers":
+                chunk_inserted, chunk_failed = _process_customer_records(db, user, chunk)
+            else:
+                chunk_inserted, chunk_failed = _process_sales_records(db, user, company, chunk)
+            inserted += chunk_inserted
+            failed += chunk_failed
+            batch.insertedCount = inserted
+            batch.failedCount = failed
+            batch.processedCount = min(int(batch.totalRows or 0), int(batch.processedCount or 0) + len(chunk))
+            db.commit()
+        except Exception as error:
+            db.rollback()
+            batch = db.query(ImportBatch).filter(ImportBatch.id == batch_id).first()
+            remaining = (
+                db.query(ImportRecord)
+                .filter(ImportRecord.batchId == batch_id, ImportRecord.status == "valid")
+                .all()
+            )
+            logging.exception("Import batch %s failed while processing a chunk", batch_id)
+            failure_message = "An unexpected processing error interrupted the import. Contact support with the batch ID."
+            for record in remaining:
+                record.status = "failed"
+                record.message = failure_message
+            if inserted:
+                _reconcile_import_changes(db, user, batch.id)
+            batch.insertedCount = inserted
+            batch.failedCount = failed + len(remaining)
+            batch.processedCount = int(batch.totalRows or 0)
+            batch.failureMessage = failure_message
+            _finish_import_batch(batch, "failed")
+            db.commit()
+            _record_import_event(
+                db,
+                batch,
+                "Import Failed",
+                actor=user,
+                audit_status="failure",
+                notification=("failed", "import_failed", "Import Failed", f"Import batch {batch.id} failed during processing."),
+            )
+            return _confirm_response(batch)
 
     if batch.entityType == "sales":
-        # Recompute derived customer metrics only after the batch is committed so
-        # the derived counters are never persisted ahead of (or without) the sales.
         refresh_customer_metrics_for_company(db, user.companyId)
 
-    create_audit_log(
-        db,
-        company=company.name,
-        user=user.email,
-        action=f"Data Import Completed:{batch.entityType}",
-        entity_name=batch.fileName,
-        ip_address="Unknown",
-        browser="Unknown",
-    )
-    create_notification(
-        db,
-        user.companyId,
-        message=f"Import completed for {batch.fileName}: {inserted} rows imported, {failed} failed.",
-        notification_type="import_completed" if failed == 0 else "import_completed_with_errors",
-        severity="warning" if failed else "success",
-        target_role="admin",
-    )
+    _reconcile_import_changes(db, user, batch.id)
+
+    db.refresh(batch)
+    terminal_status = "completed_with_errors" if failed > 0 else "completed"
+    _finish_import_batch(batch, terminal_status)
+    batch.insertedCount = inserted
+    batch.failedCount = failed
+    batch.processedCount = int(batch.totalRows or 0)
+    if batch.entityType in ("products", "inventory", "sales"):
+        invalidate_forecast_cache(user.companyId)
     db.commit()
 
-    skipped = batch.invalidCount + batch.duplicateCount
-    return ImportConfirmResponse(
-        batchId=batch.id,
-        entityType=batch.entityType,
-        fileName=batch.fileName,
-        status=batch.status,
-        totalRows=batch.totalRows,
-        insertedCount=inserted,
-        updatedCount=0,
-        failedCount=failed,
-        invalidCount=batch.invalidCount,
-        duplicateCount=batch.duplicateCount,
-        skippedCount=skipped,
+    if batch.status == "completed":
+        action = "Import Completed"
+        notification_type = "import_completed"
+        title = "Import Completed"
+        message = f"Import {batch.fileName} (batch {batch.id}) completed successfully with {inserted} records processed."
+        event_key = "completed"
+    else:
+        action = "Import Completed With Errors"
+        notification_type = "import_completed_with_errors"
+        title = "Import Completed With Errors"
+        message = f"Import {batch.fileName} (batch {batch.id}) completed with {failed} failed records."
+        event_key = "completed-with-errors"
+    _record_import_event(
+        db,
+        batch,
+        action,
+        actor=user,
+        audit_status="success" if batch.status == "completed" else "warning",
+        notification=(event_key, notification_type, title, message),
     )
+    return _confirm_response(batch)
 
 
 # ---------------------------------------------------------------------------
@@ -1231,10 +1664,20 @@ def _to_batch_response(batch: ImportBatch) -> ImportBatchResponse:
         insertedCount=int(batch.insertedCount or 0),
         updatedCount=int(batch.updatedCount or 0),
         failedCount=int(batch.failedCount or 0),
+        processedCount=int(batch.processedCount or 0),
+        progressPercent=(
+            100
+            if int(batch.totalRows or 0) == 0
+            else min(100, round(int(batch.processedCount or 0) * 100 / int(batch.totalRows or 0)))
+        ),
+        cancelRequested=bool(batch.cancelRequested),
+        failureMessage=batch.failureMessage,
         status=batch.status or "pending",
         importedBy=batch.importedBy,
         createdAt=batch.createdAt.isoformat() if batch.createdAt else None,
+        startedAt=batch.startedAt.isoformat() if batch.startedAt else None,
         completedAt=batch.completedAt.isoformat() if batch.completedAt else None,
+        durationSeconds=float(batch.durationSeconds or 0) if batch.completedAt else None,
     )
 
 
@@ -1322,6 +1765,15 @@ def _derive_error_field(message: str, resolved: dict) -> str | None:
     return None
 
 
+def _error_type_for_status(status: str) -> str:
+    return {
+        "invalid": "Validation",
+        "duplicate": "Duplicate",
+        "failed": "Processing",
+        "cancelled": "Cancelled",
+    }.get(status, "Import")
+
+
 def get_import_errors(batch_id: int, db: DbDependency, authorization: str | None = None) -> ImportErrorsResponse:
     user, _company = _authorize_admin(db, authorization)
     batch = db.query(ImportBatch).filter(ImportBatch.id == batch_id, ImportBatch.companyId == user.companyId).first()
@@ -1332,7 +1784,7 @@ def get_import_errors(batch_id: int, db: DbDependency, authorization: str | None
         db.query(ImportRecord)
         .filter(
             ImportRecord.batchId == batch.id,
-            ImportRecord.status.in_(("invalid", "duplicate", "failed")),
+            ImportRecord.status.in_(("invalid", "duplicate", "failed", "cancelled")),
         )
         .order_by(ImportRecord.rowNumber.asc(), ImportRecord.id.asc())
         .all()
@@ -1341,11 +1793,15 @@ def get_import_errors(batch_id: int, db: DbDependency, authorization: str | None
     errors: list[ImportErrorResponse] = []
     for record in records:
         resolved: dict = {}
+        record_data: dict[str, str] = {}
         if record.rowData:
             try:
-                resolved = (json.loads(record.rowData) or {}).get("resolved", {})
+                payload = json.loads(record.rowData) or {}
+                resolved = payload.get("resolved", {})
+                record_data = {str(key): str(value) for key, value in (payload.get("row") or {}).items()}
             except (json.JSONDecodeError, TypeError):
                 resolved = {}
+                record_data = {}
         message = record.message or "Row could not be imported"
         # Split multi-message fields so each validation failure is surfaced
         # individually, mirroring the per-row error messages.
@@ -1356,6 +1812,8 @@ def get_import_errors(batch_id: int, db: DbDependency, authorization: str | None
                 ImportErrorResponse(
                     rowNumber=int(record.rowNumber or 0),
                     field=_derive_error_field(part, resolved),
+                    recordData=record_data,
+                    errorType=_error_type_for_status(record.status or ""),
                     message=part,
                     status=record.status or "",
                 )
@@ -1374,7 +1832,7 @@ def export_failed_records(batch_id: int, db: DbDependency, authorization: str | 
         db.query(ImportRecord)
         .filter(
             ImportRecord.batchId == batch.id,
-            ImportRecord.status.in_(("invalid", "duplicate", "failed")),
+            ImportRecord.status.in_(("invalid", "duplicate", "failed", "cancelled")),
         )
         .order_by(ImportRecord.rowNumber.asc(), ImportRecord.id.asc())
         .all()
@@ -1397,13 +1855,14 @@ def export_failed_records(batch_id: int, db: DbDependency, authorization: str | 
                 {
                     "RowNumber": int(record.rowNumber or 0),
                     "Status": record.status or "",
+                    "ErrorType": _error_type_for_status(record.status or ""),
                     "Errors": record.message or "",
                 },
             )
         )
 
     output = io.StringIO()
-    fieldnames = ["RowNumber", "Status", "Errors", *extra_headers]
+    fieldnames = ["RowNumber", "Status", "ErrorType", "Errors", *extra_headers]
     writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
     for raw_row, base_fields in parsed_rows:
@@ -1423,6 +1882,8 @@ def delete_import_batch(batch_id: int, db: DbDependency, authorization: str | No
     batch = db.query(ImportBatch).filter(ImportBatch.id == batch_id, ImportBatch.companyId == user.companyId).first()
     if not batch:
         raise HTTPException(status_code=404, detail="Import batch not found")
+    if batch.status in ("queued", "processing"):
+        raise HTTPException(status_code=409, detail="Cancel the active import before deleting its history.")
 
     file_name = batch.fileName
     db.query(ImportRecord).filter(ImportRecord.batchId == batch.id).delete()
