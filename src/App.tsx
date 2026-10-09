@@ -10,6 +10,7 @@ import SalesPage from './pages/admin/SalesPage.tsx';
 import SalesDetailsPage from './pages/admin/SalesDetailsPage.tsx';
 import SalesInvoicePage from './pages/admin/SalesInvoicePage.tsx';
 import NotificationsPage from './pages/admin/NotificationsPage.tsx';
+import WorkflowsPage from './pages/admin/WorkflowsPage.tsx';
 import CategoriesPage from './pages/admin/CategoriesPage.tsx';
 import ProductsPage from './pages/admin/ProductsPage.tsx';
 import ProductDetailsPage from './pages/admin/ProductDetailsPage.tsx';
@@ -124,8 +125,16 @@ function AppRoutes() {
       <Route
         path="/notifications"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst', 'viewer']}>
             <NotificationsPage />
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/workflows"
+        element={
+          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst', 'viewer']}>
+            <WorkflowsPage />
           </RoleProtectedRoute>
         }
       />

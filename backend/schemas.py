@@ -1,5 +1,6 @@
 import re
-from typing import Any
+from datetime import datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
@@ -79,6 +80,115 @@ class DashboardResponse(BaseModel):
     companyName: str
     metrics: dict
     visibility: list[str]
+
+
+class ApprovalRequestCreate(BaseModel):
+    requestType: Literal[
+        "stock_adjustment",
+        "product_deactivation",
+        "product_price_change",
+        "customer_information_change",
+        "inventory_import_approval",
+    ]
+    relatedRecord: str = Field(min_length=1, max_length=200)
+    requestedChanges: dict[str, Any]
+    reason: str = Field(min_length=3, max_length=4000)
+    submit: bool = True
+    # Kept temporarily for compatibility with requests submitted by the previous UI.
+    title: str | None = Field(default=None, min_length=3, max_length=160)
+    description: str | None = Field(default=None, min_length=3, max_length=4000)
+    details: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("relatedRecord", "reason", "title", "description")
+    @classmethod
+    def normalize_optional_strings(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+    @field_validator("requestedChanges")
+    @classmethod
+    def validate_requested_changes(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if not value:
+            raise ValueError("At least one requested change is required")
+        return value
+
+    @model_validator(mode="after")
+    def populate_legacy_request_fields(self):
+        if self.title is None:
+            self.title = f"{self.requestType.replace('_', ' ').title()} — {self.relatedRecord}"
+        if self.description is None:
+            self.description = self.reason
+        return self
+
+
+class ApprovalDecision(BaseModel):
+    decision: Literal["approved", "rejected"]
+    comment: str = Field(default="", max_length=2000)
+
+
+class ApprovalAction(BaseModel):
+    comment: str = Field(default="", max_length=2000)
+
+
+class WorkflowConfigurationUpdate(BaseModel):
+    approverRole: Literal["admin", "company_admin", "super_admin", "analyst", "viewer"]
+    approvalRequired: bool = True
+    isActive: bool = True
+    allowSelfApproval: bool = False
+
+
+class WorkflowConfigurationResponse(BaseModel):
+    requestType: Literal[
+        "stock_adjustment",
+        "product_deactivation",
+        "product_price_change",
+        "customer_information_change",
+        "inventory_import_approval",
+    ]
+    approverRole: str
+    approvalRequired: bool
+    isActive: bool
+    allowSelfApproval: bool
+
+
+class ApprovalHistoryResponse(BaseModel):
+    id: int
+    action: str
+    actorId: int
+    actorName: str
+    comment: str
+    createdAt: datetime
+
+
+class PendingApprovalCountsResponse(BaseModel):
+    total: int
+    byRequestType: dict[str, int]
+
+
+class ApprovalRequestResponse(BaseModel):
+    id: int
+    requestType: str
+    title: str
+    description: str
+    reason: str
+    relatedRecord: str
+    requestedChanges: dict[str, Any]
+    currentValues: dict[str, Any]
+    priority: str
+    assignedApproverRole: str
+    allowSelfApproval: bool
+    details: dict[str, Any]
+    status: Literal["draft", "submitted", "pending_approval", "approved", "rejected", "cancelled"]
+    companyId: int
+    companyName: str
+    requesterId: int
+    requesterName: str
+    requesterEmail: str
+    reviewerId: int | None
+    reviewerName: str | None
+    reviewerComment: str | None
+    createdAt: datetime
+    updatedAt: datetime
+    history: list[ApprovalHistoryResponse] = Field(default_factory=list)
 
 
 class ProductSummaryResponse(BaseModel):

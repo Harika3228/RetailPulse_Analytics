@@ -422,3 +422,19 @@ def ensure_schema() -> None:
             connection.execute(text("ALTER TABLE quality_issues ADD COLUMN previousStatus VARCHAR"))
         if "statusUpdatedAt" not in quality_columns:
             connection.execute(text("ALTER TABLE quality_issues ADD COLUMN statusUpdatedAt DATETIME"))
+
+        # workflow request details added after the initial approvals feature
+        approval_columns = {column["name"] for column in inspect(engine).get_columns("approval_requests")}
+        if "reason" not in approval_columns:
+            connection.execute(text("ALTER TABLE approval_requests ADD COLUMN reason VARCHAR"))
+            connection.execute(text("UPDATE approval_requests SET reason = description WHERE reason IS NULL"))
+        if "relatedRecord" not in approval_columns:
+            connection.execute(text("ALTER TABLE approval_requests ADD COLUMN relatedRecord VARCHAR"))
+        if "requestedChanges" not in approval_columns:
+            connection.execute(text("ALTER TABLE approval_requests ADD COLUMN requestedChanges VARCHAR DEFAULT '{}'"))
+            connection.execute(text("UPDATE approval_requests SET requestedChanges = details WHERE requestedChanges IS NULL OR requestedChanges = '{}'"))
+        if "currentValues" not in approval_columns:
+            connection.execute(text("ALTER TABLE approval_requests ADD COLUMN currentValues VARCHAR DEFAULT '{}'"))
+        if "assignedApproverRole" not in approval_columns:
+            connection.execute(text("ALTER TABLE approval_requests ADD COLUMN assignedApproverRole VARCHAR DEFAULT 'admin'"))
+        connection.execute(text("UPDATE approval_requests SET status = 'pending_approval' WHERE status = 'pending'"))

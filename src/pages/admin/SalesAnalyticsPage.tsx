@@ -191,6 +191,7 @@ export default function SalesAnalyticsPage() {
     }
   };
 
+  
   return (
     <AdminLayout>
       <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage('')} />

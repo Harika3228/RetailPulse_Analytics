@@ -22,6 +22,7 @@ from backend.routers.customers_routes import router as customers_router
 from backend.routers.imports_routes import router as imports_router
 from backend.routers.forecasting_routes import router as forecasting_router
 from backend.routers.analytics_routes import router as analytics_router
+from backend.routers.workflows_routes import router as workflows_router
 
 ensure_schema()
 seed_demo_data()
@@ -37,3 +38,4 @@ app.include_router(customers_router)
 app.include_router(imports_router)
 app.include_router(forecasting_router)
 app.include_router(analytics_router)
+app.include_router(workflows_router)

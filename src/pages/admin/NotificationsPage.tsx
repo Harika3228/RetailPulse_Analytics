@@ -133,6 +133,11 @@ export default function NotificationsPage() {
             <MenuItem value="import_completed">Import completed</MenuItem>
             <MenuItem value="import_failed">Import failed</MenuItem>
             <MenuItem value="sale_created">Sales alert</MenuItem>
+            <MenuItem value="approval_request_submitted">Request submitted</MenuItem>
+            <MenuItem value="approval_request_assigned">Approval assigned</MenuItem>
+            <MenuItem value="approval_request_approved">Approval approved</MenuItem>
+            <MenuItem value="approval_request_rejected">Approval rejected</MenuItem>
+            <MenuItem value="approval_request_cancelled">Approval cancelled</MenuItem>
           </TextField>
           <TextField size="small" select label="Priority" value={priorityFilter} onChange={(event) => { setPriorityFilter(event.target.value); setPage(0); }} sx={{ minWidth: 140 }}>
             <MenuItem value="">All priorities</MenuItem>
@@ -211,6 +216,9 @@ export default function NotificationsPage() {
           ) : null}
         </DialogContent>
         <DialogActions>
+          {selectedNotification?.resourceType === 'Approval Request' && Number(resourceId) > 0 ? (
+            <Button onClick={() => navigate(`/workflows?requestId=${resourceId}`)}>View request</Button>
+          ) : null}
           {selectedNotification?.resourceType === 'Product' && resourceId ? <Button onClick={() => navigate(`/products/${resourceId}`)}>View Product</Button> : null}
           <Button onClick={() => setSelectedNotification(null)}>Close</Button>
         </DialogActions>

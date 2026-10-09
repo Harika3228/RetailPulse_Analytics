@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, inspect, text
+from sqlalchemy import Column, DateTime, Float, Integer, String, UniqueConstraint, inspect, text
 
 from backend.database import Base, engine
 
@@ -353,6 +353,51 @@ class ForecastSnapshot(Base):
     period = Column(String, default="30d")
     generatedAt = Column(DateTime, default=datetime.now(timezone.utc))
     payload = Column(String)
+
+
+class ApprovalRequestRecord(Base):
+    __tablename__ = "approval_requests"
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    requesterId = Column(Integer, index=True)
+    requestType = Column(String, index=True)
+    title = Column(String)
+    description = Column(String)
+    reason = Column(String)
+    relatedRecord = Column(String)
+    requestedChanges = Column(String, default="{}")
+    currentValues = Column(String, default="{}")
+    assignedApproverRole = Column(String, default="admin", index=True)
+    details = Column(String, default="{}")
+    status = Column(String, default="pending_approval", index=True)
+    reviewerId = Column(Integer, nullable=True, index=True)
+    reviewerComment = Column(String)
+    createdAt = Column(DateTime, default=datetime.now(timezone.utc), index=True)
+    updatedAt = Column(DateTime, default=datetime.now(timezone.utc))
+
+
+class WorkflowConfiguration(Base):
+    __tablename__ = "workflow_configurations"
+    __table_args__ = (UniqueConstraint("companyId", "requestType", name="uq_workflow_configuration_company_type"),)
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    requestType = Column(String, index=True)
+    approverRole = Column(String, default="admin")
+    approvalRequired = Column(Integer, default=1)
+    isActive = Column(Integer, default=1)
+    allowSelfApproval = Column(Integer, default=0)
+    updatedAt = Column(DateTime, default=datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class ApprovalHistoryRecord(Base):
+    __tablename__ = "approval_history"
+    id = Column(Integer, primary_key=True, index=True)
+    requestId = Column(Integer, index=True)
+    companyId = Column(Integer, index=True)
+    actorId = Column(Integer, index=True)
+    action = Column(String, index=True)
+    comment = Column(String)
+    createdAt = Column(DateTime, default=datetime.now(timezone.utc), index=True)
 
 
 Base.metadata.create_all(bind=engine)

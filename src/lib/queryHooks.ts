@@ -124,4 +124,9 @@ export const queryKeys = {
     list: (params: string) => ['notifications', 'list', params] as const,
     unreadCount: ['notifications', 'unread-count'] as const,
   },
+  workflows: {
+    all: ['workflows'] as const,
+    list: (params: string) => ['workflows', 'list', params] as const,
+    detail: (id: number | string) => ['workflows', 'detail', String(id)] as const,
+  },
 } as const;
