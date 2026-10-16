@@ -104,6 +104,16 @@ def ensure_schema() -> None:
     with engine.begin() as connection:
         migrate_products_table_for_company_sku_uniqueness(connection)
 
+        if "api_request_metrics" in inspect(connection).get_table_names():
+            api_metric_columns = {
+                column["name"]
+                for column in inspect(connection).get_columns("api_request_metrics")
+            }
+            if "errorDetails" not in api_metric_columns:
+                connection.execute(
+                    text("ALTER TABLE api_request_metrics ADD COLUMN errorDetails TEXT")
+                )
+
         # companies
         if "industry" not in company_columns:
             connection.execute(text("ALTER TABLE companies ADD COLUMN industry VARCHAR"))

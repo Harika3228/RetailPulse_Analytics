@@ -19,6 +19,9 @@ function getSectionFromPath(pathname) {
   if (pathname.startsWith('/workflows')) {
     return 'Workflows & Approvals';
   }
+  if (pathname === '/system-health') {
+    return 'System Health';
+  }
   if (pathname === '/inventory/forecast') {
     return 'Inventory Forecast';
   }

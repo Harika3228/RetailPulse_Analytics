@@ -345,6 +345,120 @@ class ReconciliationExecution(Base):
     errorMessage = Column(String)
 
 
+class ApiRequestMetric(Base):
+    __tablename__ = "api_request_metrics"
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    method = Column(String)
+    path = Column(String, index=True)
+    statusCode = Column(Integer, index=True)
+    responseTimeMs = Column(Float)
+    errorDetails = Column(String)
+    createdAt = Column(DateTime, default=datetime.now(timezone.utc), index=True)
+
+
+class ApiRequestMetricAggregate(Base):
+    __tablename__ = "api_request_metric_aggregates"
+    __table_args__ = (
+        UniqueConstraint(
+            "companyId",
+            "bucketStart",
+            "method",
+            "path",
+            name="uq_api_metric_company_bucket_method_path",
+        ),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    bucketStart = Column(DateTime, index=True)
+    method = Column(String)
+    path = Column(String, index=True)
+    requestCount = Column(Integer, default=0)
+    clientErrorCount = Column(Integer, default=0)
+    serverErrorCount = Column(Integer, default=0)
+    responseTimeTotalMs = Column(Float, default=0)
+    responseTimeMaxMs = Column(Float, default=0)
+    updatedAt = Column(DateTime, default=datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class HealthCheckResult(Base):
+    __tablename__ = "health_check_results"
+    __table_args__ = (UniqueConstraint("companyId", "component", name="uq_health_result_company_component"),)
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, default=0, index=True)
+    component = Column(String, index=True)
+    status = Column(String, index=True)
+    message = Column(String)
+    checkedAt = Column(DateTime, default=datetime.now(timezone.utc), index=True)
+
+
+class SystemJob(Base):
+    __tablename__ = "system_jobs"
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    jobType = Column(String, index=True)
+    triggeredByUserId = Column(Integer, index=True)
+    triggeredBy = Column(String)
+    relatedEntityType = Column(String)
+    relatedEntityId = Column(String, index=True)
+    status = Column(String, default="pending", index=True)
+    startedAt = Column(DateTime, index=True)
+    completedAt = Column(DateTime)
+    durationMs = Column(Float)
+    retryCount = Column(Integer, default=0)
+    failureReason = Column(String)
+    details = Column(String)
+    createdAt = Column(DateTime, default=datetime.now(timezone.utc), index=True)
+    updatedAt = Column(DateTime, default=datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class SystemError(Base):
+    __tablename__ = "system_errors"
+    __table_args__ = (UniqueConstraint("companyId", "fingerprint", name="uq_system_error_company_fingerprint"),)
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    fingerprint = Column(String, index=True)
+    category = Column(String, index=True)
+    component = Column(String, index=True)
+    endpointOrJob = Column(String, index=True)
+    severity = Column(String, default="high", index=True)
+    status = Column(String, default="open", index=True)
+    occurrenceCount = Column(Integer, default=1)
+    firstOccurredAt = Column(DateTime, default=datetime.now(timezone.utc), index=True)
+    lastOccurredAt = Column(DateTime, default=datetime.now(timezone.utc), index=True)
+    resolutionNotes = Column(String)
+    resolvedAt = Column(DateTime)
+    resolvedByUserId = Column(Integer, index=True)
+    updatedAt = Column(DateTime, default=datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class SystemIncidentEvent(Base):
+    __tablename__ = "system_incident_events"
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    systemErrorId = Column(Integer, index=True)
+    action = Column(String, index=True)
+    previousStatus = Column(String)
+    newStatus = Column(String)
+    notes = Column(String)
+    actorUserId = Column(Integer, index=True)
+    actorName = Column(String)
+    createdAt = Column(DateTime, default=datetime.now(timezone.utc), index=True)
+
+
+class SystemHealthThreshold(Base):
+    __tablename__ = "system_health_thresholds"
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, unique=True, index=True)
+    apiErrorRatePercent = Column(Float, default=5.0)
+    averageResponseTimeMs = Column(Float, default=1000.0)
+    sampleWindowMinutes = Column(Integer, default=5)
+    minimumRequestCount = Column(Integer, default=10)
+    repeatedFailureCount = Column(Integer, default=3)
+    updatedByUserId = Column(Integer, index=True)
+    updatedAt = Column(DateTime, default=datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
 class ForecastSnapshot(Base):
     __tablename__ = "forecast_snapshots"
     id = Column(Integer, primary_key=True, index=True)

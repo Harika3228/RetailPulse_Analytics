@@ -20,8 +20,8 @@ export {
   isNotFoundError,
 };
 
-export const sidebarItems = ['Dashboard', 'Inventory', 'Inventory Forecast', 'Categories', 'Products', 'Customers', 'Data Imports', 'Sales', 'Sales Analytics', 'Forecasting', 'Reports', 'Data Quality', 'Workflows & Approvals', 'Notifications', 'Audit Logs', 'Settings'];
-export const adminOnlyItems = new Set(['Categories', 'Products', 'Customers', 'Data Imports', 'Data Quality', 'Audit Logs']);
+export const sidebarItems = ['Dashboard', 'Inventory', 'Inventory Forecast', 'Categories', 'Products', 'Customers', 'Data Imports', 'Sales', 'Sales Analytics', 'Forecasting', 'Reports', 'Data Quality', 'Workflows & Approvals', 'System Health', 'Notifications', 'Audit Logs', 'Settings'];
+export const adminOnlyItems = new Set(['Categories', 'Products', 'Customers', 'Data Imports', 'Data Quality', 'System Health', 'Audit Logs']);
 
 export const sidebarRouteMap = {
   Dashboard: '/dashboard',
@@ -38,6 +38,7 @@ export const sidebarRouteMap = {
   'Data Quality': '/data-quality',
   Notifications: '/notifications',
   'Workflows & Approvals': '/workflows',
+  'System Health': '/system-health',
   Settings: '/dashboard',
   'Audit Logs': '/audit-logs',
 };

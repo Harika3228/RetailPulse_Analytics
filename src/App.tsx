@@ -23,6 +23,7 @@ import AuditLogsPage from './pages/admin/AuditLogsPage.tsx';
 import ForecastingPage from './pages/admin/ForecastingPage.tsx';
 import ReportsPage from './pages/admin/ReportsPage.tsx';
 import DataQualityPage from './pages/admin/DataQualityPage.tsx';
+import SystemHealthPage from './pages/admin/SystemHealthPage.tsx';
 import { AuthProvider, useAuth } from './auth/AuthContext.tsx';
 import ErrorBoundary from './components/admin/ErrorBoundary.tsx';
 
@@ -255,6 +256,14 @@ function AppRoutes() {
         element={
           <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
             <DataQualityPage />
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/system-health"
+        element={
+          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
+            <SystemHealthPage />
           </RoleProtectedRoute>
         }
       />

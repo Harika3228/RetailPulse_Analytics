@@ -38,7 +38,14 @@ from backend.models import (
     SalesTransactionLine,
     StockAdjustment,
     StockMovement,
+    SystemJob,
     User,
+)
+from backend.system_monitoring import (
+    create_system_job,
+    finish_system_job,
+    notify_repeated_import_failure,
+    record_system_error,
 )
 from backend.schemas import (
     ImportBatchDetailResponse,
@@ -983,6 +990,27 @@ def enqueue_import(batch_id: int, db: DbDependency, authorization: str | None = 
     batch.startedAt = None
     batch.completedAt = None
     batch.durationSeconds = None
+    job = db.query(SystemJob).filter(
+        SystemJob.companyId == batch.companyId,
+        SystemJob.relatedEntityType == "ImportBatch",
+        SystemJob.relatedEntityId == str(batch.id),
+        SystemJob.status.in_(("pending", "running")),
+    ).order_by(SystemJob.id.desc()).first()
+    if job is None:
+        create_system_job(
+            db,
+            company_id=batch.companyId,
+            job_type=f"Data import ({batch.entityType})",
+            triggered_by_user_id=user.id,
+            triggered_by=user.name or user.email,
+            related_entity_type="ImportBatch",
+            related_entity_id=batch.id,
+            details={
+                "entityType": batch.entityType,
+                "fileName": batch.fileName,
+                "totalRows": int(batch.totalRows or 0),
+            },
+        )
     db.commit()
     response = ImportConfirmResponse(
         batchId=batch.id,
@@ -1023,8 +1051,38 @@ def run_import_job(batch_id: int, user_id: int) -> None:
     try:
         user = db.query(User).filter(User.id == user_id).first()
         batch = db.query(ImportBatch).filter(ImportBatch.id == batch_id).first()
-        if not batch or batch.status != "queued":
+        if not batch:
             return
+        job = db.query(SystemJob).filter(
+            SystemJob.companyId == batch.companyId,
+            SystemJob.relatedEntityType == "ImportBatch",
+            SystemJob.relatedEntityId == str(batch.id),
+            SystemJob.status.in_(("pending", "running")),
+        ).order_by(SystemJob.id.desc()).first()
+        if job is None and batch.status == "queued":
+            job = create_system_job(
+                db,
+                company_id=batch.companyId,
+                job_type=f"Data import ({batch.entityType})",
+                triggered_by_user_id=user_id,
+                triggered_by=(user.name or user.email) if user else "Unavailable user",
+                related_entity_type="ImportBatch",
+                related_entity_id=batch.id,
+                details={
+                    "entityType": batch.entityType,
+                    "fileName": batch.fileName,
+                    "totalRows": int(batch.totalRows or 0),
+                },
+            )
+        if batch.status != "queued":
+            if job and batch.status == "cancelled":
+                finish_system_job(job, "cancelled")
+                db.commit()
+            return
+        if job:
+            job.status = "running"
+            job.startedAt = batch.startedAt or datetime.now(timezone.utc)
+            db.commit()
         if not user:
             _finish_import_batch(batch, "failed")
             batch.failureMessage = "The user who started this import is no longer available."
@@ -1038,6 +1096,17 @@ def run_import_job(batch_id: int, user_id: int) -> None:
                 record.message = batch.failureMessage
             batch.failedCount = len(remaining)
             batch.processedCount = int(batch.totalRows or 0)
+            if job:
+                finish_system_job(job, "failed", failure_reason="The user who started this import is no longer available.")
+                system_error = record_system_error(
+                    db,
+                    company_id=batch.companyId,
+                    fingerprint="import:missing-user",
+                    category="Background job failure",
+                    component="Data Import",
+                    endpoint_or_job="Data import",
+                )
+                notify_repeated_import_failure(db, system_error)
             db.commit()
             _record_import_event(
                 db,
@@ -1049,6 +1118,34 @@ def run_import_job(batch_id: int, user_id: int) -> None:
             return
         company = get_company_for_user(db, user)
         confirm_import(batch_id, db, user, company)
+        db.refresh(batch)
+        if job:
+            job.details = json.dumps({
+                "entityType": batch.entityType,
+                "fileName": batch.fileName,
+                "totalRows": int(batch.totalRows or 0),
+                "processedCount": int(batch.processedCount or 0),
+                "insertedCount": int(batch.insertedCount or 0),
+                "updatedCount": int(batch.updatedCount or 0),
+                "failedCount": int(batch.failedCount or 0),
+            }, separators=(",", ":"))
+            finish_system_job(
+                job,
+                "cancelled" if batch.status == "cancelled" else "failed" if batch.status == "failed" else "completed",
+                failure_reason="Import processing failed. Review the import batch details." if batch.status == "failed" else None,
+                completed_at=batch.completedAt or datetime.now(timezone.utc),
+            )
+            if batch.status == "failed":
+                system_error = record_system_error(
+                    db,
+                    company_id=batch.companyId,
+                    fingerprint=f"import:{batch.entityType}:failed",
+                    category="Background job failure",
+                    component="Data Import",
+                    endpoint_or_job=f"Data import ({batch.entityType})",
+                )
+                notify_repeated_import_failure(db, system_error)
+            db.commit()
     except Exception:
         db.rollback()
         batch = db.query(ImportBatch).filter(ImportBatch.id == batch_id).first()
@@ -1074,6 +1171,44 @@ def run_import_job(batch_id: int, user_id: int) -> None:
                 audit_status="failure",
                 notification=("failed", "import_failed", "Import Failed", f"Import batch {batch.id} failed due to an unexpected error."),
             )
+            job = db.query(SystemJob).filter(
+                SystemJob.companyId == batch.companyId,
+                SystemJob.relatedEntityType == "ImportBatch",
+                SystemJob.relatedEntityId == str(batch.id),
+                SystemJob.status.in_(("pending", "running")),
+            ).order_by(SystemJob.id.desc()).first()
+            if job:
+                finish_system_job(
+                    job,
+                    "failed",
+                    failure_reason="Import processing failed. Review the import batch details.",
+                    completed_at=batch.completedAt,
+                )
+            system_error = record_system_error(
+                db,
+                company_id=batch.companyId,
+                fingerprint=f"import:{batch.entityType}:failed",
+                category="Background job failure",
+                component="Data Import",
+                endpoint_or_job=f"Data import ({batch.entityType})",
+            )
+            notify_repeated_import_failure(db, system_error)
+            db.commit()
+        elif batch and batch.status in ("completed", "completed_with_errors", "cancelled", "failed"):
+            job = db.query(SystemJob).filter(
+                SystemJob.companyId == batch.companyId,
+                SystemJob.relatedEntityType == "ImportBatch",
+                SystemJob.relatedEntityId == str(batch.id),
+                SystemJob.status.in_(("pending", "running")),
+            ).order_by(SystemJob.id.desc()).first()
+            if job:
+                finish_system_job(
+                    job,
+                    "cancelled" if batch.status == "cancelled" else "failed" if batch.status == "failed" else "completed",
+                    failure_reason="Import processing failed. Review the import batch details." if batch.status == "failed" else None,
+                    completed_at=batch.completedAt or datetime.now(timezone.utc),
+                )
+                db.commit()
         logging.exception("Background import job %s failed", batch_id)
     finally:
         db.close()
@@ -1100,6 +1235,14 @@ def cancel_import_batch(batch_id: int, db: DbDependency, authorization: str | No
         batch.cancelRequested = 1
         batch.processedCount = int(batch.totalRows or 0)
         _finish_import_batch(batch, "cancelled")
+        job = db.query(SystemJob).filter(
+            SystemJob.companyId == batch.companyId,
+            SystemJob.relatedEntityType == "ImportBatch",
+            SystemJob.relatedEntityId == str(batch.id),
+            SystemJob.status.in_(("pending", "running")),
+        ).order_by(SystemJob.id.desc()).first()
+        if job:
+            finish_system_job(job, "cancelled", completed_at=batch.completedAt)
         db.commit()
         _record_import_event(db, batch, "Import Cancelled", actor=user)
         return {"batchId": batch.id, "status": batch.status, "message": "Import cancelled."}

@@ -12,8 +12,14 @@ from fastapi.responses import Response
 from backend.auth_utils import get_company_for_user, get_current_user
 from backend.database import DbDependency
 from backend.helpers import _ensure_admin, _ensure_report_access, _ensure_sales_user, _get_company_analytics_summary, _get_company_inventory_summary, _get_company_product_summary, _get_company_sales_summary, _get_company_top_customers, _get_company_top_products, count_unread_notifications, create_audit_log, list_company_notifications
-from backend.models import AuditLog, Category, Customer, Notification, Product, QualityIssue, ReconciliationExecution, ReportHistory, ScheduledReport, SalesTransaction, SalesTransactionLine, StockMovement, User
+from backend.models import AuditLog, Category, Customer, Notification, Product, QualityIssue, ReconciliationExecution, ReportHistory, ScheduledReport, SalesTransaction, SalesTransactionLine, StockMovement, SystemJob, User
 from backend.schemas import AnalyticsDashboardResponse, AuditLogResponse, DashboardResponse, DataQualityIssue, DataQualityIssueUpdate, DataQualityResponse, InventoryDashboardSummaryResponse, NotificationResponse, ProductSummaryResponse, ReconciliationHistoryResponse, ReportHistoryRequest, ReportHistoryResponse, SalesDashboardSummaryResponse, ScheduledReportRequest, ScheduledReportResponse, TopCustomerResponse, TopProductResponse
+from backend.system_monitoring import (
+    create_system_job,
+    finish_system_job,
+    notify_system_incident,
+    record_system_error,
+)
 
 
 def dashboard(db: DbDependency, authorization: str | None = None) -> DashboardResponse:
@@ -342,6 +348,19 @@ def data_quality_report(
     execution = ReconciliationExecution(companyId=user.companyId, triggeredByUserId=user.id, status="running", startedAt=datetime.now(timezone.utc))
     db.add(execution)
     db.commit()
+    job = create_system_job(
+        db,
+        company_id=user.companyId,
+        job_type="Data reconciliation",
+        triggered_by_user_id=user.id,
+        triggered_by=user.name or user.email,
+        related_entity_type="ReconciliationExecution",
+        related_entity_id=execution.id,
+        details={"executionId": execution.id},
+        status="running",
+        started_at=execution.startedAt,
+    )
+    db.commit()
     try:
         result = _run_data_quality_report(db, authorization, search, issue_type, severity, module, status, date_from, date_to)
         execution.completedAt = datetime.now(timezone.utc)
@@ -349,13 +368,35 @@ def data_quality_report(
         execution.issuesDetected = result.errorRecords + result.warningRecords
         execution.issuesResolved = sum(1 for issue in result.issues if issue.status == "resolved")
         execution.status = "completed_with_issues" if result.unresolvedIssues else "completed"
+        job.details = json.dumps({
+            "executionId": execution.id,
+            "recordsChecked": execution.recordsChecked,
+            "issuesDetected": execution.issuesDetected,
+            "issuesResolved": execution.issuesResolved,
+        }, separators=(",", ":"))
+        finish_system_job(job, "completed", completed_at=execution.completedAt)
         db.commit()
         return result
     except Exception as error:
         execution.completedAt = datetime.now(timezone.utc)
         execution.status = "failed"
         execution.failedChecks = 1
-        execution.errorMessage = str(error)
+        execution.errorMessage = "Reconciliation failed. Check system error details."
+        finish_system_job(
+            job,
+            "failed",
+            failure_reason="Reconciliation failed. Review the execution details.",
+            completed_at=execution.completedAt,
+        )
+        system_error = record_system_error(
+            db,
+            company_id=user.companyId,
+            fingerprint="reconciliation:failed",
+            category="Background job failure",
+            component="Reconciliation",
+            endpoint_or_job="Data reconciliation",
+        )
+        notify_system_incident(db, system_error)
         db.commit()
         raise
 
@@ -369,6 +410,19 @@ def run_import_data_quality_reconciliation(db: DbDependency, user) -> DataQualit
     )
     db.add(execution)
     db.commit()
+    job = create_system_job(
+        db,
+        company_id=user.companyId,
+        job_type="Post-import data reconciliation",
+        triggered_by_user_id=user.id,
+        triggered_by=user.name or user.email,
+        related_entity_type="ReconciliationExecution",
+        related_entity_id=execution.id,
+        details={"executionId": execution.id},
+        status="running",
+        started_at=execution.startedAt,
+    )
+    db.commit()
     try:
         result = _run_data_quality_report(db, user_override=user)
         execution.completedAt = datetime.now(timezone.utc)
@@ -376,6 +430,13 @@ def run_import_data_quality_reconciliation(db: DbDependency, user) -> DataQualit
         execution.issuesDetected = result.errorRecords + result.warningRecords
         execution.issuesResolved = sum(1 for issue in result.issues if issue.status == "resolved")
         execution.status = "completed_with_issues" if result.unresolvedIssues else "completed"
+        job.details = json.dumps({
+            "executionId": execution.id,
+            "recordsChecked": execution.recordsChecked,
+            "issuesDetected": execution.issuesDetected,
+            "issuesResolved": execution.issuesResolved,
+        }, separators=(",", ":"))
+        finish_system_job(job, "completed", completed_at=execution.completedAt)
         db.commit()
         return result
     except Exception as error:
@@ -386,6 +447,21 @@ def run_import_data_quality_reconciliation(db: DbDependency, user) -> DataQualit
             execution.status = "failed"
             execution.failedChecks = 1
             execution.errorMessage = "Reconciliation failed after an import. Check server logs for details."
+            finish_system_job(
+                job,
+                "failed",
+                failure_reason="Reconciliation failed after an import. Review the execution details.",
+                completed_at=execution.completedAt,
+            )
+            system_error = record_system_error(
+                db,
+                company_id=user.companyId,
+                fingerprint="reconciliation:failed",
+                category="Background job failure",
+                component="Reconciliation",
+                endpoint_or_job="Data reconciliation",
+            )
+            notify_system_incident(db, system_error)
             db.commit()
         logging.exception("Data quality reconciliation failed after import batch processing")
         raise RuntimeError("Post-import data quality reconciliation failed.") from error
@@ -708,6 +784,42 @@ def create_report_history(payload: ReportHistoryRequest, db: DbDependency, autho
     db.add(item)
     db.commit()
     db.refresh(item)
+    generated_at = item.generatedAt or datetime.now(timezone.utc)
+    report_status = "completed" if item.status == "completed" else "failed"
+    job = create_system_job(
+        db,
+        company_id=user.companyId,
+        job_type=f"Report generation ({item.reportType})",
+        triggered_by_user_id=user.id,
+        triggered_by=user.name or user.email,
+        related_entity_type="ReportHistory",
+        related_entity_id=item.id,
+        details={
+            "reportType": item.reportType,
+            "exportFormat": item.exportFormat,
+            "rowCount": int(item.rowCount or 0),
+        },
+        status=report_status,
+        started_at=generated_at,
+    )
+    finish_system_job(
+        job,
+        report_status,
+        failure_reason="Report generation failed. Review the report history details."
+        if report_status == "failed" else None,
+        completed_at=generated_at,
+    )
+    if report_status == "failed":
+        system_error = record_system_error(
+            db,
+            company_id=user.companyId,
+            fingerprint=f"report:{item.reportType}:failed",
+            category="Background job failure",
+            component="Report Generation",
+            endpoint_or_job=f"Report generation ({item.reportType})",
+        )
+        notify_system_incident(db, system_error)
+    db.commit()
     create_audit_log(db, company=str(user.companyId), user=user.email, action="Report Generated", entity_name=payload.reportType, resource_type="ReportHistory", resource_id=item.id, company_id=user.companyId, user_id=user.id, ip_address="Unknown", browser="Unknown")
     return _report_history_response(item)
 

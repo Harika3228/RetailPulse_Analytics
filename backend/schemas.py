@@ -164,6 +164,152 @@ class PendingApprovalCountsResponse(BaseModel):
     byRequestType: dict[str, int]
 
 
+class SystemHealthErrorResponse(BaseModel):
+    source: Literal["api", "background_job", "data_quality"]
+    message: str
+    occurredAt: datetime | None
+
+
+class HealthComponentResponse(BaseModel):
+    status: Literal["healthy", "degraded", "unavailable", "not_configured"]
+    message: str
+    checkedAt: datetime
+
+
+class ApiHealthResponse(BaseModel):
+    status: Literal["healthy", "degraded", "unavailable"]
+    checkedAt: datetime
+    components: dict[str, HealthComponentResponse]
+
+
+class SystemHealthResponse(BaseModel):
+    status: Literal["healthy", "degraded", "unavailable"]
+    apiAvailable: bool
+    apiAvailabilityPercent: float
+    averageResponseTimeMs: float
+    failedApiRequests: int
+    totalApiRequests: int
+    backgroundJobsCompleted: int
+    backgroundJobsFailed: int
+    activeJobs: int
+    pendingJobs: int
+    failedReconciliations: int
+    recentErrors: list[SystemHealthErrorResponse]
+    lastHealthCheckAt: datetime
+    metricsWindowHours: int
+    apiTrend: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ApiRequestMetricResponse(BaseModel):
+    id: int
+    endpoint: str
+    method: str
+    statusCode: int
+    responseTimeMs: float
+    timestamp: datetime
+    isSuccess: bool
+    errorDetails: str | None
+
+
+class ApiRequestMetricsPageResponse(BaseModel):
+    items: list[ApiRequestMetricResponse]
+    total: int
+    page: int
+    pageSize: int
+
+
+class SystemJobResponse(BaseModel):
+    id: int
+    jobType: str
+    triggeredBy: str
+    relatedRecord: str
+    startedAt: datetime | None
+    completedAt: datetime | None
+    durationMs: float | None
+    status: Literal["pending", "running", "completed", "failed", "cancelled"]
+    retryCount: int
+    failureReason: str | None
+    canCancel: bool
+    canRetry: bool
+    details: dict[str, Any]
+
+
+class SystemJobsPageResponse(BaseModel):
+    items: list[SystemJobResponse]
+    total: int
+    page: int
+    pageSize: int
+
+
+class SystemErrorResponse(BaseModel):
+    id: int
+    category: str
+    component: str
+    endpointOrJob: str
+    timestamp: datetime
+    severity: Literal["critical", "high", "medium", "low"]
+    occurrenceCount: int
+    status: Literal["open", "investigating", "resolved"]
+    resolutionNotes: str | None
+    firstOccurredAt: datetime | None = None
+    lastOccurredAt: datetime | None = None
+
+
+class SystemErrorsPageResponse(BaseModel):
+    items: list[SystemErrorResponse]
+    total: int
+    page: int
+    pageSize: int
+
+
+class SystemErrorUpdate(BaseModel):
+    status: Literal["open", "investigating", "resolved"]
+    resolutionNotes: str | None = Field(default=None, max_length=2000)
+    investigationNotes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("resolutionNotes", "investigationNotes")
+    @classmethod
+    def normalize_notes(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+    @model_validator(mode="after")
+    def require_resolution_notes(self):
+        if self.status == "resolved" and not self.resolutionNotes:
+            raise ValueError("Resolution notes are required when resolving an error")
+        if self.status == "investigating" and not self.investigationNotes:
+            raise ValueError("Investigation notes are required when starting an investigation")
+        return self
+
+
+class SystemIncidentEventResponse(BaseModel):
+    id: int
+    action: str
+    previousStatus: str | None
+    newStatus: str | None
+    notes: str | None
+    actorUserId: int | None
+    actorName: str
+    createdAt: datetime
+
+
+class SystemHealthThresholdResponse(BaseModel):
+    apiErrorRatePercent: float
+    averageResponseTimeMs: float
+    sampleWindowMinutes: int
+    minimumRequestCount: int
+    repeatedFailureCount: int
+    updatedAt: datetime | None
+    updatedByUserId: int | None
+
+
+class SystemHealthThresholdUpdate(BaseModel):
+    apiErrorRatePercent: float = Field(ge=0.1, le=100)
+    averageResponseTimeMs: float = Field(gt=0, le=120000)
+    sampleWindowMinutes: int = Field(ge=1, le=1440)
+    minimumRequestCount: int = Field(ge=1, le=10000)
+    repeatedFailureCount: int = Field(ge=1, le=1000)
+
+
 class ApprovalRequestResponse(BaseModel):
     id: int
     requestType: str
