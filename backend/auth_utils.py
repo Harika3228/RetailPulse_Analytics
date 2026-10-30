@@ -73,6 +73,8 @@ def validate_refresh_token(db, token: str) -> User:
     user = get_user_by_email(db, email, company_id)
     if not user:
         raise credentials_exception
+    if (user.status or "active").strip().lower() != "active":
+        raise credentials_exception
     return user
 
 
@@ -147,6 +149,6 @@ def get_current_user(db, token: str, expected_type: str = "access"):
         raise credentials_exception from exc
 
     user = get_user_by_email(db, token_data.email, company_id=token_data.company_id)
-    if user is None:
+    if user is None or (user.status or "active").strip().lower() != "active":
         raise credentials_exception
     return user

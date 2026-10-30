@@ -111,6 +111,8 @@ export default function DashboardSummaryPage() {
   const [drillDownRows, setDrillDownRows] = useState<Array<{ label: string; value: string }>>([]);
 
   const isCompanyAdmin = ['admin', 'company_admin', 'super_admin'].includes(normalizeRole(user?.role));
+  const canViewAnalytics = user?.permissions?.dashboard_analytics?.includes('view') ?? false;
+  const canExportDashboard = user?.permissions?.dashboard_analytics?.includes('export') ?? false;
 
   const buildQuery = useCallback(() => {
     const params = new URLSearchParams();
@@ -125,7 +127,7 @@ export default function DashboardSummaryPage() {
   }, [filters]);
 
   const queryString = useMemo(() => buildQuery(), [buildQuery]);
-  const analyticsEnabled = isCompanyAdmin && !isDateRangeInvalid(filters.dateFrom, filters.dateTo);
+  const analyticsEnabled = canViewAnalytics && !isDateRangeInvalid(filters.dateFrom, filters.dateTo);
 
   const salesSummaryQuery = useApiQuery<{ totalSales: number; totalRevenue: number; totalOrders: number; averageOrderValue: number }>(
     queryKeys.dashboard.summary,
@@ -312,7 +314,7 @@ export default function DashboardSummaryPage() {
     <AdminLayout>
       <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage('')} />
       <NoSalesDataNotice
-        show={isCompanyAdmin && !analyticsLoading && analyticsSummary.totalOrders === 0}
+        show={canViewAnalytics && !analyticsLoading && analyticsSummary.totalOrders === 0}
         onReset={handleResetFilters}
       />
       <Card className="dashboard-content__header-card">
@@ -320,8 +322,12 @@ export default function DashboardSummaryPage() {
         <Typography className="dashboard-content__breadcrumbs">Sales Summary</Typography>
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', mb: 2 }}>
           <Button variant="outlined" onClick={() => { void handleManualRefresh(); }} disabled={isRefreshing}>{isRefreshing ? 'Refreshing…' : 'Refresh'}</Button>
-          <Button variant="outlined" onClick={() => { void handleExport('csv'); }}>Export CSV</Button>
-          <Button variant="outlined" onClick={() => { void handleExport('pdf'); }}>Export PDF</Button>
+          {canExportDashboard ? (
+            <>
+              <Button variant="outlined" onClick={() => { void handleExport('csv'); }}>Export CSV</Button>
+              <Button variant="outlined" onClick={() => { void handleExport('pdf'); }}>Export PDF</Button>
+            </>
+          ) : null}
           <Typography variant="body2" color="text.secondary">{lastUpdatedAt ? `Last updated: ${lastUpdatedAt}` : 'Awaiting refresh'}</Typography>
         </Box>
         <Box className="dashboard-summary-grid">
@@ -337,7 +343,7 @@ export default function DashboardSummaryPage() {
           ))}
         </Box>
       </Card>
-      {isCompanyAdmin ? (
+      {canViewAnalytics ? (
         <>
           <Card className="dashboard-content__table-card">
             <Typography className="dashboard-content__title dashboard-content__title--dark">Analytics Dashboard</Typography>

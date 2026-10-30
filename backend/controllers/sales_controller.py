@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from sqlalchemy import asc, desc, func
 
+from backend.access_control import ADMIN_ROLES, normalize_role
 from backend.auth_utils import get_company_for_user, get_current_user
 from backend.cache import invalidate_forecast_cache
 from backend.controllers.customers_controller import refresh_customer_metrics_for_company
@@ -89,6 +90,7 @@ def list_selectable_customers_for_sales(
     token = _extract_token(authorization)
     user = get_current_user(db, token)
     _ensure_sales_user(user)
+    can_view_contact_details = normalize_role(user.role) in ADMIN_ROLES
 
     query = db.query(Customer).filter(
         Customer.companyId == user.companyId,
@@ -96,11 +98,14 @@ def list_selectable_customers_for_sales(
     )
     if q:
         wildcard = f"%{q.strip()}%"
-        query = query.filter(
-            Customer.name.ilike(wildcard)
-            | Customer.email.ilike(wildcard)
-            | Customer.phone.ilike(wildcard)
-        )
+        searchable_customer_fields = Customer.name.ilike(wildcard)
+        if can_view_contact_details:
+            searchable_customer_fields = (
+                searchable_customer_fields
+                | Customer.email.ilike(wildcard)
+                | Customer.phone.ilike(wildcard)
+            )
+        query = query.filter(searchable_customer_fields)
     customers = query.order_by(Customer.name.asc()).all()
     create_audit_log(db, company=str(user.companyId), user=user.email,
                      action="List Sales Selectable Customers", ip_address="Unknown", browser="Unknown")
@@ -108,8 +113,8 @@ def list_selectable_customers_for_sales(
         SalesSelectableCustomerResponse(
             id=c.id,
             name=c.name or "",
-            email=c.email or "",
-            phone=c.phone,
+            email=(c.email or "") if can_view_contact_details else "",
+            phone=c.phone if can_view_contact_details else None,
         )
         for c in customers
     ]

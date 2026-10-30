@@ -20,8 +20,27 @@ export {
   isNotFoundError,
 };
 
-export const sidebarItems = ['Dashboard', 'Inventory', 'Inventory Forecast', 'Categories', 'Products', 'Customers', 'Data Imports', 'Sales', 'Sales Analytics', 'Forecasting', 'Reports', 'Data Quality', 'Workflows & Approvals', 'System Health', 'Notifications', 'Audit Logs', 'Settings'];
-export const adminOnlyItems = new Set(['Categories', 'Products', 'Customers', 'Data Imports', 'Data Quality', 'System Health', 'Audit Logs']);
+export const sidebarItems = ['Dashboard', 'Inventory', 'Inventory Forecast', 'Categories', 'Products', 'Customers', 'Data Imports', 'Sales', 'Sales Analytics', 'Forecasting', 'Reports', 'Data Quality', 'Workflows & Approvals', 'System Health', 'Data Governance', 'Notifications', 'Audit Logs', 'Settings'];
+export const sidebarPermissions: Record<string, [string, string]> = {
+  Dashboard: ['dashboard_analytics', 'view'],
+  Inventory: ['inventory', 'view'],
+  'Inventory Forecast': ['inventory', 'view'],
+  Categories: ['products', 'view'],
+  Products: ['products', 'view'],
+  Customers: ['customers', 'view'],
+  'Data Imports': ['data_imports', 'view'],
+  Sales: ['sales', 'view'],
+  'Sales Analytics': ['sales', 'view'],
+  Forecasting: ['inventory', 'view'],
+  Reports: ['reports', 'view'],
+  'Data Quality': ['data_governance', 'manage_access'],
+  'Workflows & Approvals': ['workflows_approvals', 'view'],
+  'System Health': ['system_monitoring', 'manage_access'],
+  'Data Governance': ['data_governance', 'manage_access'],
+  Notifications: ['dashboard_analytics', 'view'],
+  'Audit Logs': ['audit_logs', 'view'],
+  Settings: ['dashboard_analytics', 'view'],
+};
 
 export const sidebarRouteMap = {
   Dashboard: '/dashboard',
@@ -39,6 +58,7 @@ export const sidebarRouteMap = {
   Notifications: '/notifications',
   'Workflows & Approvals': '/workflows',
   'System Health': '/system-health',
+  'Data Governance': '/data-governance',
   Settings: '/dashboard',
   'Audit Logs': '/audit-logs',
 };

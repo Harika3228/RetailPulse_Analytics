@@ -2,7 +2,7 @@ import { Box, Button, Card, Chip, Stack, Typography } from '@mui/material';
 import { useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext.tsx';
-import { adminOnlyItems, normalizeRole, sidebarItems, sidebarRouteMap } from './adminShared';
+import { sidebarItems, sidebarPermissions, sidebarRouteMap } from './adminShared';
 import { queryKeys, useApiQuery } from '../../lib/queryHooks';
 import '../../styles/dashboard.css';
 
@@ -21,6 +21,9 @@ function getSectionFromPath(pathname) {
   }
   if (pathname === '/system-health') {
     return 'System Health';
+  }
+  if (pathname === '/data-governance') {
+    return 'Data Governance';
   }
   if (pathname === '/inventory/forecast') {
     return 'Inventory Forecast';
@@ -63,12 +66,14 @@ export default function AdminLayout({ children }) {
   const notificationsQuery = useApiQuery<{ count: number }>(queryKeys.notifications.unreadCount, '/notifications/unread-count', token, { refetchInterval: 10000 });
   const notificationCount = notificationsQuery.data?.count ?? 0;
 
-  const isAdmin = ['admin', 'company_admin', 'super_admin'].includes(normalizeRole(user?.role));
   const activeSection = getSectionFromPath(location.pathname);
 
   const visibleSidebarItems = useMemo(
-    () => sidebarItems.filter((item) => !adminOnlyItems.has(item) || isAdmin),
-    [isAdmin]
+    () => sidebarItems.filter((item) => {
+      const [module, action] = sidebarPermissions[item] ?? ['dashboard_analytics', 'view'];
+      return user?.permissions?.[module]?.includes(action) ?? false;
+    }),
+    [user?.permissions]
   );
 
   return (

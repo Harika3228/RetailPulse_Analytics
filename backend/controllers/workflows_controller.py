@@ -20,6 +20,7 @@ from backend.models import (
     Product,
     StockAdjustment,
     StockMovement,
+    RolePermissionConfiguration,
     User,
     WorkflowConfiguration,
 )
@@ -33,6 +34,7 @@ REQUEST_TYPES = {
     "product_price_change",
     "customer_information_change",
     "inventory_import_approval",
+    "role_access_change",
 }
 ALLOWED_TRANSITIONS = {
     "draft": {"submitted", "cancelled"},
@@ -112,6 +114,8 @@ def update_workflow_configuration(
     _ensure_admin(user)
     if request_type not in REQUEST_TYPES:
         raise HTTPException(status_code=404, detail="Workflow request type not found")
+    if request_type == "role_access_change" and not payload.approvalRequired:
+        raise HTTPException(status_code=422, detail="Access requests must require approval")
     configuration = _get_workflow_configuration(db, user.companyId, request_type)
     if configuration is None:
         raise HTTPException(status_code=500, detail="Unable to initialize workflow configuration")
@@ -119,7 +123,9 @@ def update_workflow_configuration(
     configuration.approverRole = payload.approverRole
     configuration.approvalRequired = int(payload.approvalRequired)
     configuration.isActive = int(payload.isActive)
-    configuration.allowSelfApproval = int(payload.allowSelfApproval)
+    configuration.allowSelfApproval = int(
+        payload.allowSelfApproval and request_type != "role_access_change"
+    )
     create_audit_log(
         db,
         company=str(user.companyId),
@@ -155,6 +161,15 @@ def _users_in_approver_role(db: DbDependency, company_id: int, approver_role: st
 def _can_review(db: DbDependency, user: User, request: ApprovalRequestRecord) -> bool:
     configuration = _get_workflow_configuration(db, user.companyId, request.requestType, create=False)
     allow_self = bool(configuration.allowSelfApproval) if configuration else False
+    if request.requestType == "role_access_change" and request.requesterId == user.id:
+        return False
+    if request.requestType == "role_access_change":
+        try:
+            requested_role = json.loads(request.requestedChanges or "{}").get("role")
+        except (AttributeError, json.JSONDecodeError):
+            return False
+        if requested_role in ADMIN_ROLES | {"super_admin"}:
+            return user.role == "super_admin"
     if request.requesterId == user.id:
         return allow_self and _role_matches(user, request.assignedApproverRole or "admin")
     return user.role in ADMIN_ROLES or _role_matches(user, request.assignedApproverRole or "admin")
@@ -194,10 +209,22 @@ def _related_entity(db: DbDependency, request_type: str, related_record: str, co
         if not entity:
             raise HTTPException(status_code=404, detail="Related inventory import batch not found")
         return entity
+    if request_type == "role_access_change":
+        if not related_record.isdigit():
+            raise HTTPException(status_code=422, detail="Related user ID is invalid")
+        entity = db.query(User).filter(
+            User.id == int(related_record),
+            User.companyId == company_id,
+        ).first()
+        if not entity:
+            raise HTTPException(status_code=404, detail="Related user not found")
+        return entity
     raise HTTPException(status_code=422, detail="Unsupported approval request type")
 
 
 def _current_values(entity, request_type: str) -> dict:
+    if request_type == "role_access_change":
+        return {"id": entity.id, "role": entity.role or "viewer", "status": entity.status or "active"}
     if request_type in {"stock_adjustment", "product_deactivation", "product_price_change"}:
         return {
             "id": entity.id,
@@ -452,6 +479,49 @@ def submit_approval_request(
         raise HTTPException(status_code=500, detail="Unable to initialize workflow configuration")
     if not configuration.isActive:
         raise HTTPException(status_code=409, detail="This workflow is inactive")
+    if payload.requestType == "role_access_change":
+        if not payload.requestedChanges or set(payload.requestedChanges) - {"role", "status"}:
+            raise HTTPException(status_code=422, detail="Access requests may only change a role or account status")
+        target = _related_entity(db, payload.requestType, payload.relatedRecord, user.companyId)
+        is_self_request = target.id == user.id
+        if not is_self_request and user.role not in ADMIN_ROLES:
+            raise HTTPException(status_code=403, detail="Only an administrator may request access changes for another user")
+        if is_self_request and set(payload.requestedChanges) != {"role"}:
+            raise HTTPException(status_code=422, detail="Users may only request a role change for themselves")
+        requested_role = payload.requestedChanges.get("role")
+        approved_roles = {
+            (role or "").strip().lower().replace(" ", "_")
+            for (role,) in db.query(User.role).filter(
+                User.companyId == user.companyId,
+                User.role.isnot(None),
+            ).distinct().all()
+        }
+        approved_roles.update({"admin", "company_admin", "super_admin", "analyst", "viewer"})
+        approved_roles.update(
+            (role or "").strip().lower().replace(" ", "_")
+            for (role,) in db.query(RolePermissionConfiguration.role).filter(
+                RolePermissionConfiguration.companyId == user.companyId,
+            ).all()
+        )
+        normalized_changes: dict[str, str] = {}
+        if requested_role is not None:
+            if not isinstance(requested_role, str):
+                raise HTTPException(status_code=422, detail="Requested role must be a string")
+            normalized_role = requested_role.strip().lower().replace(" ", "_")
+            if normalized_role not in approved_roles:
+                raise HTTPException(status_code=422, detail="Requested role is not configured for this company")
+            normalized_changes["role"] = normalized_role
+        requested_status = payload.requestedChanges.get("status")
+        if requested_status is not None:
+            if requested_status not in {"active", "inactive"}:
+                raise HTTPException(status_code=422, detail="Requested status must be active or inactive")
+            normalized_changes["status"] = requested_status
+        if not normalized_changes:
+            raise HTTPException(status_code=422, detail="An access request must contain a role or status change")
+        payload.requestedChanges = normalized_changes
+        payload.relatedRecord = str(target.id)
+        if not configuration.approvalRequired:
+            raise HTTPException(status_code=409, detail="Access requests must be approved before access changes take effect")
     now = datetime.now(timezone.utc)
     request = ApprovalRequestRecord(
         companyId=user.companyId,
@@ -499,6 +569,8 @@ def _advance_submission(
 ) -> None:
     if not configuration.isActive:
         raise HTTPException(status_code=409, detail="This workflow is inactive")
+    if request.requestType == "role_access_change" and not configuration.approvalRequired:
+        raise HTTPException(status_code=409, detail="Access requests must be approved before access changes take effect")
     request.assignedApproverRole = configuration.approverRole
     _transition_request(db, user, request, "submitted")
     if configuration.approvalRequired:
@@ -541,6 +613,12 @@ def _transition_request(
     request.status = next_status
     request.updatedAt = now
     _record_history_event(db, user, request, next_status, comment)
+    access_change_target = None
+    if request.requestType == "role_access_change" and request.relatedRecord.isdigit():
+        access_change_target = db.query(User).filter(
+            User.id == int(request.relatedRecord),
+            User.companyId == request.companyId,
+        ).first()
 
     if next_status == "pending_approval":
         for approver in _users_in_approver_role(
@@ -555,6 +633,19 @@ def _transition_request(
                 message=f"{user.name or user.email} submitted {request.title} for your review.",
                 notification_type="approval_request_assigned",
                 title="Approval assigned",
+                severity="info",
+                priority="medium",
+                resource_type="Approval Request",
+                resource_id=request.id,
+            )
+        if access_change_target and access_change_target.id != request.requesterId:
+            create_notification(
+                db,
+                company_id=user.companyId,
+                user_id=access_change_target.id,
+                message=f"An access change request was submitted for your account. No access changes take effect until approval.",
+                notification_type="access_request_submitted",
+                title="Access change pending approval",
                 severity="info",
                 priority="medium",
                 resource_type="Approval Request",
@@ -586,6 +677,20 @@ def _transition_request(
             resource_type="Approval Request",
             resource_id=request.id,
         )
+        if access_change_target and access_change_target.id != request.requesterId:
+            outcome = "approved" if next_status == "approved" else "rejected"
+            create_notification(
+                db,
+                company_id=user.companyId,
+                user_id=access_change_target.id,
+                message=f"Access change request #{request.id} for your account was {outcome}.",
+                notification_type=f"access_request_{outcome}",
+                title=f"Access change {outcome}",
+                severity="success" if next_status == "approved" else "warning",
+                priority="medium",
+                resource_type="Approval Request",
+                resource_id=request.id,
+            )
     elif next_status == "cancelled":
         create_notification(
             db,
@@ -599,6 +704,19 @@ def _transition_request(
             resource_type="Approval Request",
             resource_id=request.id,
         )
+        if access_change_target and access_change_target.id != request.requesterId:
+            create_notification(
+                db,
+                company_id=user.companyId,
+                user_id=access_change_target.id,
+                message=f"Access change request #{request.id} for your account was cancelled.",
+                notification_type="access_request_cancelled",
+                title="Access change cancelled",
+                severity="info",
+                priority="low",
+                resource_type="Approval Request",
+                resource_id=request.id,
+            )
         if current_status in {"submitted", "pending_approval"}:
             for approver in _users_in_approver_role(
                 db,
@@ -750,6 +868,102 @@ def _apply_requested_changes(
 ) -> None:
     if reviewer.companyId != request.companyId:
         raise HTTPException(status_code=404, detail="Approval request not found")
+    if request.requestType == "role_access_change":
+        if not request.relatedRecord.isdigit():
+            raise HTTPException(status_code=409, detail="The access request user context is invalid")
+        target = db.query(User).filter(
+            User.id == int(request.relatedRecord),
+            User.companyId == reviewer.companyId,
+        ).first()
+        if target is None:
+            raise HTTPException(status_code=409, detail="The access request user context is invalid")
+        requester = db.query(User).filter(
+            User.id == request.requesterId,
+            User.companyId == reviewer.companyId,
+        ).first()
+        if requester is None or (
+            target.id != requester.id and requester.role not in ADMIN_ROLES
+        ):
+            raise HTTPException(status_code=409, detail="The access request initiator is no longer authorized")
+        try:
+            requested_changes = json.loads(request.requestedChanges or "{}")
+            original = json.loads(request.currentValues or "{}")
+        except (AttributeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=500, detail="Access request data is invalid") from exc
+        current = _current_values(target, request.requestType)
+        if original and current != original:
+            raise HTTPException(status_code=409, detail="The user's access changed after this request was submitted; cancel and resubmit")
+        proposed_role = requested_changes.get("role")
+        proposed_status = requested_changes.get("status")
+        if proposed_role is not None and (not isinstance(proposed_role, str) or proposed_role not in {
+            (role or "").strip().lower().replace(" ", "_")
+            for (role,) in db.query(User.role).filter(
+                User.companyId == reviewer.companyId,
+                User.role.isnot(None),
+            ).distinct().all()
+        } | {"admin", "company_admin", "super_admin", "analyst", "viewer"} | {
+            (role or "").strip().lower().replace(" ", "_")
+            for (role,) in db.query(RolePermissionConfiguration.role).filter(
+                RolePermissionConfiguration.companyId == reviewer.companyId,
+            ).all()
+        }):
+            raise HTTPException(status_code=422, detail="Requested role is not configured for this company")
+        if proposed_status is not None and proposed_status not in {"active", "inactive"}:
+            raise HTTPException(status_code=422, detail="Requested status is invalid")
+        current_target_role = (target.role or "viewer").strip().lower().replace(" ", "_")
+        reviewer_role = (reviewer.role or "").strip().lower().replace(" ", "_")
+        if proposed_role in ADMIN_ROLES | {"super_admin"} and reviewer_role != "super_admin":
+            raise HTTPException(status_code=403, detail="Only a super administrator can approve administrator access")
+        if (
+            current_target_role in ADMIN_ROLES
+            and (proposed_role not in (None, current_target_role) or proposed_status == "inactive")
+        ) and reviewer_role != "super_admin":
+            raise HTTPException(status_code=403, detail="Only a super administrator can change administrator access")
+        if (
+            current_target_role in ADMIN_ROLES
+            and (proposed_role not in (None, current_target_role) or proposed_status == "inactive")
+            and (target.status or "active").lower() == "active"
+        ):
+            active_admin_count = db.query(func.count(User.id)).filter(
+                User.companyId == reviewer.companyId,
+                func.lower(User.status) == "active",
+                func.lower(User.role).in_(ADMIN_ROLES),
+            ).scalar() or 0
+            if active_admin_count <= 1:
+                raise HTTPException(status_code=409, detail="The company's last active administrator cannot be removed")
+        before = {"role": target.role or "viewer", "status": target.status or "active"}
+        if proposed_role is not None:
+            target.role = proposed_role
+        if proposed_status is not None:
+            target.status = proposed_status
+        after = {"role": target.role or "viewer", "status": target.status or "active"}
+        create_audit_log(
+            db,
+            company=str(reviewer.companyId),
+            user=reviewer.email,
+            user_id=reviewer.id,
+            company_id=reviewer.companyId,
+            action="Access Request Approved",
+            resource_type="User Access Assignment",
+            resource_id=str(target.id),
+            description=json.dumps({
+                "requestId": request.id,
+                "targetUserId": target.id,
+                "targetEmail": target.email,
+                "before": before,
+                "after": after,
+                "reason": request.reason,
+            }),
+            commit=False,
+        )
+        _record_history_event(
+            db,
+            reviewer,
+            request,
+            "access_updated",
+            f"Access changed from {json.dumps(before, sort_keys=True)} to {json.dumps(after, sort_keys=True)}.",
+        )
+        return
     entity = _related_entity(db, request.requestType, request.relatedRecord, request.companyId)
     try:
         proposed = json.loads(request.requestedChanges or "{}")

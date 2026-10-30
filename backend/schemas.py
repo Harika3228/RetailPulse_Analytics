@@ -5,6 +5,113 @@ from typing import Any, Literal
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 
+class GovernancePermissionChangeResponse(BaseModel):
+    id: int
+    action: str
+    actor: str
+    target: str | None
+    previous: Any | None = None
+    newValue: Any | None = None
+    reason: str | None = None
+    relatedRequestId: int | None = None
+    resourceType: str | None
+    timestamp: datetime | None
+    description: str
+
+
+class GovernanceOverviewResponse(BaseModel):
+    totalUsers: int
+    activeUsers: int
+    inactiveUsers: int
+    totalRoles: int
+    pendingAccessRequests: int
+    elevatedPermissionUsers: int
+    recentPermissionChanges: list[GovernancePermissionChangeResponse]
+    lastAccessReviewAt: datetime | None
+
+
+class GovernanceUserResponse(BaseModel):
+    id: int
+    name: str
+    email: str
+    role: str
+    status: str
+    permissions: dict[str, list[str]]
+    accessUpdatedAt: datetime | None
+    accessUpdatedBy: str | None
+
+
+class GovernanceUserAccessUpdate(BaseModel):
+    role: str
+    status: Literal["active", "inactive"]
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class AccessReviewCreate(BaseModel):
+    status: Literal["reviewed", "flagged"]
+    comment: str = Field(default="", max_length=2000)
+    flaggedPermissions: list[str] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def require_flag_details(self):
+        if self.status == "reviewed" and self.flaggedPermissions:
+            raise ValueError("Reviewed status cannot include flagged permissions")
+        if self.status == "flagged" and not self.flaggedPermissions and not self.comment.strip():
+            raise ValueError("Flagged reviews require a permission or a comment")
+        return self
+
+
+class AccessReviewWorkflowCreate(BaseModel):
+    role: str | None = None
+    status: Literal["active", "inactive"] | None = None
+    reason: str = Field(min_length=3, max_length=4000)
+
+    @model_validator(mode="after")
+    def require_access_change(self):
+        if self.role is None and self.status is None:
+            raise ValueError("Specify a role change or access status change")
+        return self
+
+
+class AccessReviewResponse(BaseModel):
+    userId: int
+    userName: str
+    userEmail: str
+    role: str
+    permissions: dict[str, list[str]]
+    lastAccessUpdatedAt: datetime | None
+    reviewStatus: Literal["reviewed", "flagged"] | None
+    reviewedBy: str | None
+    reviewDate: datetime | None
+    reviewComment: str | None
+    flaggedPermissions: list[str]
+
+
+class AccessReviewHistoryResponse(BaseModel):
+    id: int
+    userId: int
+    userName: str
+    reviewerId: int
+    reviewerName: str
+    status: Literal["reviewed", "flagged"]
+    comment: str
+    flaggedPermissions: list[str]
+    createdAt: datetime
+
+
+class RolePermissionMatrixResponse(BaseModel):
+    roles: list[str]
+    modules: list[str]
+    actions: list[str]
+    permissions: dict[str, dict[str, list[str]]]
+    updatedAt: datetime | None = None
+
+
+class RolePermissionUpdate(BaseModel):
+    permissions: dict[str, list[str]]
+    reason: str = Field(min_length=3, max_length=1000)
+
+
 # ---------------------------------------------------------------------------
 # Auth schemas
 # ---------------------------------------------------------------------------
@@ -74,6 +181,7 @@ class UserResponse(BaseModel):
     company: str
     lastLogin: str
     accountStatus: str
+    permissions: dict[str, list[str]]
 
 
 class DashboardResponse(BaseModel):
@@ -89,6 +197,7 @@ class ApprovalRequestCreate(BaseModel):
         "product_price_change",
         "customer_information_change",
         "inventory_import_approval",
+        "role_access_change",
     ]
     relatedRecord: str = Field(min_length=1, max_length=200)
     requestedChanges: dict[str, Any]
@@ -143,6 +252,7 @@ class WorkflowConfigurationResponse(BaseModel):
         "product_price_change",
         "customer_information_change",
         "inventory_import_approval",
+        "role_access_change",
     ]
     approverRole: str
     approvalRequired: bool

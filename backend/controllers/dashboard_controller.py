@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import datetime, time, timezone
 
-from sqlalchemy import and_, desc, or_
+from sqlalchemy import and_, desc, func, or_, not_
 
 from fastapi import HTTPException
 from fastapi.responses import Response
@@ -110,7 +110,7 @@ def dashboard_analytics_summary(
             ip_address="Unknown",
             browser="Unknown",
         )
-    return _get_company_analytics_summary(
+    summary = _get_company_analytics_summary(
         db,
         user.companyId,
         date_from=dateFrom,
@@ -122,6 +122,10 @@ def dashboard_analytics_summary(
         payment_method=paymentMethod,
         customer=customer,
     )
+    if user.role not in {"admin", "company_admin", "super_admin"}:
+        for customer_summary in summary.recentCustomers:
+            customer_summary.pop("email", None)
+    return summary
 
 
 def dashboard_top_products(
@@ -1201,11 +1205,42 @@ def clear_audit_logs(db: DbDependency, authorization: str | None = None) -> dict
     token = authorization.split(" ", 1)[1]
     user = get_current_user(db, token)
     _ensure_admin(user)
-    deleted_count = db.query(AuditLog).filter(AuditLog.companyId == user.companyId).delete(synchronize_session=False)
+    immutable_access_history = or_(
+        and_(
+            AuditLog.resourceType.isnot(None),
+            AuditLog.resourceType.in_({
+                "Access Review",
+                "User Access Assignment",
+                "RolePermissionConfiguration",
+            }),
+        ),
+        and_(
+            AuditLog.action.isnot(None),
+            or_(
+                func.lower(AuditLog.action).like("%access review%"),
+                func.lower(AuditLog.action).like("%access request%"),
+                func.lower(AuditLog.action).like("%permission%"),
+                func.lower(AuditLog.action).like("%role%"),
+            ),
+        ),
+    )
+    scoped_logs = db.query(AuditLog).filter(AuditLog.companyId == user.companyId)
+    preserved_count = scoped_logs.filter(immutable_access_history).count()
+    deleted_count = scoped_logs.filter(not_(immutable_access_history)).delete(
+        synchronize_session=False
+    )
     db.commit()
     create_audit_log(
         db, company=str(user.companyId), user=user.email, action="Audit Logs Cleared",
-        entity_name="audit_logs", description=f"Cleared {deleted_count} audit log records.",
+        entity_name="audit_logs",
+        description=(
+            f"Cleared {deleted_count} non-access audit records; "
+            f"preserved {preserved_count} immutable access-history records."
+        ),
         company_id=user.companyId, user_id=user.id, ip_address="Unknown", browser="Unknown",
     )
-    return {"message": "Audit logs cleared", "deletedCount": deleted_count}
+    return {
+        "message": "Non-access audit logs cleared; access history was preserved",
+        "deletedCount": deleted_count,
+        "preservedAccessHistoryCount": preserved_count,
+    }

@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from backend.auth_utils import create_access_token
 from backend.database import SessionLocal
 from backend.main import app
 from backend.models import (
@@ -30,6 +31,8 @@ class WorkflowApprovalTests(unittest.TestCase):
         self.db = SessionLocal()
         self.request_ids = []
         self.configuration_audit_ids = []
+        self.access_audit_ids = []
+        self.user_ids = []
         self.admin_headers = self._login("admin@retailpulse.com")
         self.analyst_headers = self._login("analyst@retailpulse.com")
         self.analyst = self.db.query(User).filter_by(email="analyst@retailpulse.com").first()
@@ -112,6 +115,12 @@ class WorkflowApprovalTests(unittest.TestCase):
             self.db.query(AuditLog).filter(
                 AuditLog.id.in_(self.configuration_audit_ids)
             ).delete(synchronize_session=False)
+        if self.access_audit_ids:
+            self.db.query(AuditLog).filter(
+                AuditLog.id.in_(self.access_audit_ids)
+            ).delete(synchronize_session=False)
+        if self.user_ids:
+            self.db.query(User).filter(User.id.in_(self.user_ids)).delete(synchronize_session=False)
         self.db.query(AuditLog).filter(
             AuditLog.resourceType == "Product",
             AuditLog.resourceId == str(self.product_id),
@@ -190,6 +199,92 @@ class WorkflowApprovalTests(unittest.TestCase):
         response = self.client.get("/workflows/configuration", headers=self.admin_headers)
         self.assertEqual(response.status_code, 200, response.text)
         return next(item for item in response.json() if item["requestType"] == request_type)
+
+    def test_access_request_requires_approval_and_applies_role_transactionally(self):
+        requester = User(
+            companyId=self.analyst.companyId,
+            name="Access Workflow Requester",
+            email=f"access-request-{uuid.uuid4().hex[:10]}@example.com",
+            role="viewer",
+            status="active",
+        )
+        self.db.add(requester)
+        self.db.commit()
+        self.user_ids.append(requester.id)
+        requester_headers = {
+            "Authorization": "Bearer " + create_access_token({
+                "sub": requester.email,
+                "company_id": requester.companyId,
+            })
+        }
+        request_response = self.client.post(
+            "/workflows",
+            headers=requester_headers,
+            json={
+                "requestType": "role_access_change",
+                "relatedRecord": str(requester.id),
+                "requestedChanges": {"role": "analyst"},
+                "reason": "I need analyst access to support company reporting.",
+            },
+        )
+        self.assertEqual(request_response.status_code, 200, request_response.text)
+        request = request_response.json()
+        self.request_ids.append(request["id"])
+        self.assertEqual(request["status"], "pending_approval")
+        self_review = self.client.post(
+            f"/workflows/{request['id']}/decision",
+            headers=requester_headers,
+            json={"decision": "approved", "comment": "Self-approval attempt."},
+        )
+        self.assertEqual(self_review.status_code, 403, self_review.text)
+        self.db.expire_all()
+        self.assertEqual(self.db.query(User).filter_by(id=requester.id).one().role, "viewer")
+
+        rejected_request_response = self.client.post(
+            "/workflows",
+            headers=requester_headers,
+            json={
+                "requestType": "role_access_change",
+                "relatedRecord": str(requester.id),
+                "requestedChanges": {"role": "analyst"},
+                "reason": "I would like analyst access for my work.",
+            },
+        )
+        self.assertEqual(rejected_request_response.status_code, 200, rejected_request_response.text)
+        rejected_request = rejected_request_response.json()
+        self.request_ids.append(rejected_request["id"])
+        rejected = self.client.post(
+            f"/workflows/{rejected_request['id']}/decision",
+            headers=self.admin_headers,
+            json={"decision": "rejected", "comment": "The business need needs review."},
+        )
+        self.assertEqual(rejected.status_code, 200, rejected.text)
+        self.assertEqual(rejected.json()["status"], "rejected")
+        self.assertEqual(rejected.json()["reviewerComment"], "The business need needs review.")
+        self.db.expire_all()
+        self.assertEqual(self.db.query(User).filter_by(id=requester.id).one().role, "viewer")
+
+        approved = self.client.post(
+            f"/workflows/{request['id']}/decision",
+            headers=self.admin_headers,
+            json={"decision": "approved", "comment": "Approved for reporting duties."},
+        )
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertEqual(approved.json()["status"], "approved")
+        self.assertEqual(approved.json()["reviewerComment"], "Approved for reporting duties.")
+        self.db.expire_all()
+        self.assertEqual(self.db.query(User).filter_by(id=requester.id).one().role, "analyst")
+        refreshed_profile = self.client.get("/auth/me", headers=requester_headers)
+        self.assertEqual(refreshed_profile.status_code, 200, refreshed_profile.text)
+        self.assertEqual(refreshed_profile.json()["role"], "analyst")
+        self.access_audit_ids.extend(
+            audit.id
+            for audit in self.db.query(AuditLog).filter(
+                AuditLog.resourceType == "User Access Assignment",
+                AuditLog.resourceId == str(requester.id),
+                AuditLog.action == "Access Request Approved",
+            ).all()
+        )
 
     def _update_configuration(self, request_type, **changes):
         configuration = {**self._configuration(request_type), **changes}
@@ -822,7 +917,7 @@ class WorkflowApprovalTests(unittest.TestCase):
 
         configurations = self.client.get("/workflows/configuration", headers=self.admin_headers)
         self.assertEqual(configurations.status_code, 200, configurations.text)
-        self.assertEqual(len(configurations.json()), 5)
+        self.assertEqual(len(configurations.json()), 6)
         self._update_configuration("stock_adjustment", isActive=False)
         configuration_audit = self.db.query(AuditLog).filter(
             AuditLog.resourceType == "Workflow Configuration",

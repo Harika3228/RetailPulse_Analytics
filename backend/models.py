@@ -503,6 +503,31 @@ class WorkflowConfiguration(Base):
     updatedAt = Column(DateTime, default=datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
+class RolePermissionConfiguration(Base):
+    __tablename__ = "role_permission_configurations"
+    __table_args__ = (
+        UniqueConstraint("companyId", "role", name="uq_role_permission_company_role"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    role = Column(String, index=True)
+    permissions = Column(String, default="{}")
+    updatedByUserId = Column(Integer, index=True)
+    updatedAt = Column(DateTime, default=datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class AccessReviewRecord(Base):
+    __tablename__ = "access_review_records"
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    targetUserId = Column(Integer, index=True)
+    reviewerId = Column(Integer, index=True)
+    status = Column(String, index=True)
+    comment = Column(String, default="")
+    flaggedPermissions = Column(String, default="[]")
+    createdAt = Column(DateTime, default=datetime.now(timezone.utc), index=True)
+
+
 class ApprovalHistoryRecord(Base):
     __tablename__ = "approval_history"
     id = Column(Integer, primary_key=True, index=True)

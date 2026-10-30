@@ -1,4 +1,5 @@
 import {
+  Alert,
   Box,
   Button,
   Card,
@@ -44,7 +45,8 @@ type RequestType =
   | 'product_deactivation'
   | 'product_price_change'
   | 'customer_information_change'
-  | 'inventory_import_approval';
+  | 'inventory_import_approval'
+  | 'role_access_change';
 type ApprovalHistory = {
   id: number;
   action: string;
@@ -93,6 +95,7 @@ const requestTypes: { value: RequestType; label: string }[] = [
   { value: 'product_price_change', label: 'Product Price Change' },
   { value: 'customer_information_change', label: 'Customer Information Change' },
   { value: 'inventory_import_approval', label: 'Inventory Import Approval' },
+  { value: 'role_access_change', label: 'Role / Access Request' },
 ];
 
 function typeLabel(type: RequestType) {
@@ -155,6 +158,7 @@ export default function WorkflowsPage() {
   const [reason, setReason] = useState('');
   const [requestedChangesText, setRequestedChangesText] = useState('');
   const [requestType, setRequestType] = useState<RequestType>('stock_adjustment');
+  const [requestedRole, setRequestedRole] = useState('analyst');
   const [reviewComment, setReviewComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [decisionPending, setDecisionPending] = useState(false);
@@ -217,7 +221,8 @@ export default function WorkflowsPage() {
     : false;
   const selectedCanReview = selectedRequest
     ? (isReviewer || selectedRequest.assignedApproverRole === normalizeRole(user?.role))
-      && (selectedRequest.requesterId !== user?.id || selectedRequest.allowSelfApproval)
+      && (selectedRequest.requesterId !== user?.id
+        || (selectedRequest.requestType !== 'role_access_change' && selectedRequest.allowSelfApproval))
     : false;
 
   const changeSort = (column: keyof ApprovalRequest) => {
@@ -255,6 +260,7 @@ export default function WorkflowsPage() {
     setReason('');
     setRequestedChangesText('');
     setRequestType('stock_adjustment');
+    setRequestedRole('analyst');
   };
 
   const submitRequest = async (submit: boolean) => {
@@ -262,21 +268,26 @@ export default function WorkflowsPage() {
     setSubmitting(true);
     setErrorMessage('');
     try {
-      const parsed: unknown = JSON.parse(requestedChangesText);
       let requestedChanges: Record<string, unknown>;
-      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-        requestedChanges = Object.fromEntries(Object.entries(parsed));
+      if (requestType === 'role_access_change') {
+        if (!user?.id) throw new Error('Unable to identify the signed-in user.');
+        requestedChanges = { role: requestedRole };
       } else {
-        throw new Error('Requested changes must be a JSON object.');
-      }
-      if (Object.keys(requestedChanges).length === 0) {
-        throw new Error('Enter at least one requested change.');
+        const parsed: unknown = JSON.parse(requestedChangesText);
+        if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+          requestedChanges = Object.fromEntries(Object.entries(parsed));
+        } else {
+          throw new Error('Requested changes must be a JSON object.');
+        }
+        if (Object.keys(requestedChanges).length === 0) {
+          throw new Error('Enter at least one requested change.');
+        }
       }
       await apiRequest('/workflows', token, {
         method: 'POST',
         body: JSON.stringify({
           requestType,
-          relatedRecord,
+          relatedRecord: requestType === 'role_access_change' ? String(user?.id ?? '') : relatedRecord,
           reason,
           requestedChanges,
           submit,
@@ -388,7 +399,7 @@ export default function WorkflowsPage() {
           <Box>
             <Typography className="dashboard-content__title">Workflows &amp; Approvals</Typography>
             <Typography sx={{ color: '#dbeafe', mt: 0.5 }}>
-              Submit business requests and track every review decision.
+              Submit business or access requests and track every review decision.
             </Typography>
           </Box>
           <Button variant="contained" color="secondary" onClick={() => setCreateOpen(true)}>
@@ -557,7 +568,7 @@ export default function WorkflowsPage() {
                         </TextField>
                         <Stack direction="row" flexWrap="wrap" gap={1}>
                           <FormControlLabel
-                            control={<Checkbox checked={config.approvalRequired} onChange={(event) => setConfigurationDrafts((current) => ({ ...current, [value]: { ...config, approvalRequired: event.target.checked } }))} />}
+                            control={<Checkbox checked={config.approvalRequired} disabled={value === 'role_access_change'} onChange={(event) => setConfigurationDrafts((current) => ({ ...current, [value]: { ...config, approvalRequired: event.target.checked } }))} />}
                             label="Approval required"
                           />
                           <FormControlLabel
@@ -565,7 +576,7 @@ export default function WorkflowsPage() {
                             label="Active"
                           />
                           <FormControlLabel
-                            control={<Checkbox checked={config.allowSelfApproval} onChange={(event) => setConfigurationDrafts((current) => ({ ...current, [value]: { ...config, allowSelfApproval: event.target.checked } }))} />}
+                            control={<Checkbox checked={value === 'role_access_change' ? false : config.allowSelfApproval} disabled={value === 'role_access_change'} onChange={(event) => setConfigurationDrafts((current) => ({ ...current, [value]: { ...config, allowSelfApproval: event.target.checked } }))} />}
                             label="Allow requester self-approval"
                           />
                         </Stack>
@@ -602,24 +613,45 @@ export default function WorkflowsPage() {
             >
               {requestTypes.map((item) => <MenuItem key={item.value} value={item.value}>{item.label}</MenuItem>)}
             </TextField>
-            <TextField
-              label="Related record"
-              value={relatedRecord}
-              onChange={(event) => setRelatedRecord(event.target.value)}
-              required
-              inputProps={{ maxLength: 200 }}
-              placeholder="Product SKU, customer ID, inventory batch..."
-            />
-            <TextField
-              label="Requested changes (JSON)"
-              value={requestedChangesText}
-              onChange={(event) => setRequestedChangesText(event.target.value)}
-              required
-              multiline
-              minRows={4}
-              placeholder={'{\n  "stockQuantity": 150\n}'}
-              helperText="Enter the requested value as a JSON object (for example, stockQuantity, unitPrice, status, customer fields, or importBatchId)."
-            />
+            {requestType === 'role_access_change' ? (
+              <>
+                <Alert severity="info">
+                  Your current access remains unchanged until an authorized reviewer approves this request.
+                </Alert>
+                <TextField
+                  select
+                  label="Requested role"
+                  value={requestedRole}
+                  onChange={(event) => setRequestedRole(event.target.value)}
+                  required
+                >
+                  {['viewer', 'analyst', 'admin', 'company_admin', 'super_admin'].map((role) => (
+                    <MenuItem key={role} value={role}>{role.replace(/_/g, ' ')}</MenuItem>
+                  ))}
+                </TextField>
+              </>
+            ) : (
+              <>
+                <TextField
+                  label="Related record"
+                  value={relatedRecord}
+                  onChange={(event) => setRelatedRecord(event.target.value)}
+                  required
+                  inputProps={{ maxLength: 200 }}
+                  placeholder="Product SKU, customer ID, inventory batch..."
+                />
+                <TextField
+                  label="Requested changes (JSON)"
+                  value={requestedChangesText}
+                  onChange={(event) => setRequestedChangesText(event.target.value)}
+                  required
+                  multiline
+                  minRows={4}
+                  placeholder={'{\n  "stockQuantity": 150\n}'}
+                  helperText="Enter the requested value as a JSON object (for example, stockQuantity, unitPrice, status, customer fields, or importBatchId)."
+                />
+              </>
+            )}
             <TextField
               label="Reason"
               value={reason}

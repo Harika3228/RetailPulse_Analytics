@@ -6,6 +6,7 @@ type AuthUser = {
   email?: string;
   name?: string;
   role?: string;
+  permissions?: Record<string, string[]>;
   [key: string]: unknown;
 };
 

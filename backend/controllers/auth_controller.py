@@ -3,6 +3,7 @@ from datetime import timedelta
 import bcrypt
 from jose import JWTError, jwt
 
+from backend.access_control import effective_role_permissions
 from backend.auth_utils import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     ALGORITHM,
@@ -90,13 +91,18 @@ def register_user(payload: RegisterRequest, db: DbDependency) -> dict:
             "companyId": user.companyId,
             "companyName": company.name,
             "role": user.role,
+            "permissions": effective_role_permissions(db, user.companyId, user.role),
         },
     }
 
 
 def login_user(payload: LoginRequest, db: DbDependency) -> dict:
     user = get_user_by_email(db, str(payload.email).lower())
-    if not user or not verify_password(payload.password, user.password):
+    if (
+        not user
+        or (user.status or "active").strip().lower() != "active"
+        or not verify_password(payload.password, user.password)
+    ):
         raise ValueError("Invalid credentials")
 
     create_audit_log(db, company=user.email, user=user.email, action="User Login",
@@ -118,6 +124,7 @@ def login_user(payload: LoginRequest, db: DbDependency) -> dict:
             "companyId": user.companyId,
             "companyName": company.name if company else "Unknown",
             "role": user.role,
+            "permissions": effective_role_permissions(db, user.companyId, user.role),
         },
     }
 
@@ -142,6 +149,7 @@ def refresh_access_token(payload: RefreshTokenRequest, db: DbDependency) -> dict
             "companyId": user.companyId,
             "companyName": company.name if company else "Unknown",
             "role": user.role,
+            "permissions": effective_role_permissions(db, user.companyId, user.role),
         },
     }
 
@@ -190,4 +198,5 @@ def get_me_response(db: DbDependency, authorization: str | None) -> UserResponse
         "company": company.name,
         "lastLogin": user.lastLogin.strftime("%Y-%m-%d %H:%M:%S") if user.lastLogin else "Never",
         "accountStatus": user.status or "active",
+        "permissions": effective_role_permissions(db, user.companyId, user.role),
     }

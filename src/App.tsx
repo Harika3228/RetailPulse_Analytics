@@ -24,6 +24,7 @@ import ForecastingPage from './pages/admin/ForecastingPage.tsx';
 import ReportsPage from './pages/admin/ReportsPage.tsx';
 import DataQualityPage from './pages/admin/DataQualityPage.tsx';
 import SystemHealthPage from './pages/admin/SystemHealthPage.tsx';
+import DataGovernancePage from './pages/admin/DataGovernancePage.tsx';
 import { AuthProvider, useAuth } from './auth/AuthContext.tsx';
 import ErrorBoundary from './components/admin/ErrorBoundary.tsx';
 
@@ -40,12 +41,44 @@ type ProtectedRouteProps = {
 };
 
 type RoleProtectedRouteProps = ProtectedRouteProps & {
-  allowedRoles: string[];
+  module: string;
+  action?: string;
 };
 
+const permissionLandingPaths: Array<{ module: string; path: string; action: string }> = [
+  { module: 'dashboard_analytics', path: '/dashboard', action: 'view' },
+  { module: 'sales', path: '/sales', action: 'view' },
+  { module: 'inventory', path: '/inventory', action: 'view' },
+  { module: 'products', path: '/products', action: 'view' },
+  { module: 'customers', path: '/customers', action: 'view' },
+  { module: 'data_imports', path: '/data-import', action: 'view' },
+  { module: 'reports', path: '/reports', action: 'view' },
+  { module: 'workflows_approvals', path: '/workflows', action: 'view' },
+  { module: 'audit_logs', path: '/audit-logs', action: 'view' },
+  { module: 'system_monitoring', path: '/system-health', action: 'manage_access' },
+  { module: 'data_governance', path: '/data-governance', action: 'manage_access' },
+];
+
+function PermissionLanding() {
+  const { user, isAuthenticated } = useAuth();
+
+  if (!isAuthenticated || !user) {
+    return <Navigate to="/login" replace />;
+  }
+
+  const landingPath = permissionLandingPaths.find(({ module, action }) =>
+    user.permissions?.[module]?.includes(action),
+  )?.path;
+
+  return landingPath ? (
+    <Navigate to={landingPath} replace />
+  ) : (
+    <div role="alert">No application modules are currently available for your account.</div>
+  );
+}
+
 function ProtectedRoute({ children }: ProtectedRouteProps) {
-  const auth = useAuth() as { user?: { role?: string } | null; isAuthenticated: boolean };
-  const { user, isAuthenticated } = auth;
+  const { user, isAuthenticated } = useAuth();
 
   if (!isAuthenticated || !user) {
     return <Navigate to="/login" replace />;
@@ -54,17 +87,16 @@ function ProtectedRoute({ children }: ProtectedRouteProps) {
   return children;
 }
 
-function RoleProtectedRoute({ children, allowedRoles }: RoleProtectedRouteProps) {
-  const auth = useAuth() as { user?: { role?: string } | null; isAuthenticated: boolean };
-  const { user, isAuthenticated } = auth;
+function RoleProtectedRoute({ children, module, action = 'view' }: RoleProtectedRouteProps) {
+  const { user, isAuthenticated } = useAuth();
 
   if (!isAuthenticated || !user) {
     return <Navigate to="/login" replace />;
   }
 
-  const normalizedRole = (user.role ?? '').toLowerCase().replace(/\s+/g, '_');
-  if (!allowedRoles.includes(normalizedRole)) {
-    return <Navigate to="/dashboard" replace />;
+  const allowedActions = user.permissions?.[module] ?? [];
+  if (!allowedActions.includes(action)) {
+    return <PermissionLanding />;
   }
 
   return children;
@@ -78,15 +110,15 @@ function AppRoutes() {
       <Route
         path="/dashboard"
         element={
-          <ProtectedRoute>
+          <RoleProtectedRoute module="dashboard_analytics">
             <DashboardSummaryPage />
-          </ProtectedRoute>
+          </RoleProtectedRoute>
         }
       />
       <Route
         path="/sales"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+          <RoleProtectedRoute module="sales">
             <SalesDashboardPage />
           </RoleProtectedRoute>
         }
@@ -94,7 +126,7 @@ function AppRoutes() {
       <Route
         path="/analytics/sales"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+          <RoleProtectedRoute module="sales">
             <SalesAnalyticsPage />
           </RoleProtectedRoute>
         }
@@ -102,7 +134,7 @@ function AppRoutes() {
       <Route
         path="/sales/list"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+          <RoleProtectedRoute module="sales">
             <SalesPage />
           </RoleProtectedRoute>
         }
@@ -110,7 +142,7 @@ function AppRoutes() {
       <Route
         path="/sales/:transactionId"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+          <RoleProtectedRoute module="sales">
             <SalesDetailsPage />
           </RoleProtectedRoute>
         }
@@ -118,7 +150,7 @@ function AppRoutes() {
       <Route
         path="/sales/:transactionId/invoice"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+          <RoleProtectedRoute module="sales">
             <SalesInvoicePage />
           </RoleProtectedRoute>
         }
@@ -126,7 +158,7 @@ function AppRoutes() {
       <Route
         path="/notifications"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst', 'viewer']}>
+          <RoleProtectedRoute module="dashboard_analytics">
             <NotificationsPage />
           </RoleProtectedRoute>
         }
@@ -134,7 +166,7 @@ function AppRoutes() {
       <Route
         path="/workflows"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst', 'viewer']}>
+          <RoleProtectedRoute module="workflows_approvals">
             <WorkflowsPage />
           </RoleProtectedRoute>
         }
@@ -142,7 +174,7 @@ function AppRoutes() {
       <Route
         path="/inventory"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+          <RoleProtectedRoute module="inventory">
             <InventoryPage />
           </RoleProtectedRoute>
         }
@@ -150,7 +182,7 @@ function AppRoutes() {
       <Route
         path="/inventory/forecast"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+          <RoleProtectedRoute module="inventory">
             <InventoryForecastPage />
           </RoleProtectedRoute>
         }
@@ -158,7 +190,7 @@ function AppRoutes() {
       <Route
         path="/categories"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
+          <RoleProtectedRoute module="products">
             <CategoriesPage />
           </RoleProtectedRoute>
         }
@@ -166,7 +198,7 @@ function AppRoutes() {
       <Route
         path="/products"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
+          <RoleProtectedRoute module="products">
             <ProductsPage />
           </RoleProtectedRoute>
         }
@@ -174,7 +206,7 @@ function AppRoutes() {
       <Route
         path="/products/:productId"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
+          <RoleProtectedRoute module="products">
             <ProductDetailsPage />
           </RoleProtectedRoute>
         }
@@ -182,7 +214,7 @@ function AppRoutes() {
       <Route
         path="/customers"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
+          <RoleProtectedRoute module="customers">
             <CustomersPage />
           </RoleProtectedRoute>
         }
@@ -190,7 +222,7 @@ function AppRoutes() {
       <Route
         path="/customers/:customerId"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
+          <RoleProtectedRoute module="customers">
             <CustomerDetailsPage />
           </RoleProtectedRoute>
         }
@@ -198,7 +230,7 @@ function AppRoutes() {
       <Route
         path="/data-import"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
+          <RoleProtectedRoute module="data_imports">
             <DataImportsPage />
           </RoleProtectedRoute>
         }
@@ -206,7 +238,7 @@ function AppRoutes() {
       <Route
         path="/data-imports"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
+          <RoleProtectedRoute module="data_imports">
             <DataImportsPage />
           </RoleProtectedRoute>
         }
@@ -214,7 +246,7 @@ function AppRoutes() {
       <Route
         path="/forecasting"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst']}>
+          <RoleProtectedRoute module="inventory">
             <ForecastingPage />
           </RoleProtectedRoute>
         }
@@ -222,7 +254,7 @@ function AppRoutes() {
       <Route
         path="/reports"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst', 'viewer']}>
+          <RoleProtectedRoute module="reports">
             <ReportsPage />
           </RoleProtectedRoute>
         }
@@ -230,7 +262,7 @@ function AppRoutes() {
       <Route
         path="/reports/history"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst', 'viewer']}>
+          <RoleProtectedRoute module="reports">
             <ReportsPage />
           </RoleProtectedRoute>
         }
@@ -238,7 +270,7 @@ function AppRoutes() {
       <Route
         path="/reports/scheduled"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin', 'analyst', 'viewer']}>
+          <RoleProtectedRoute module="reports">
             <ReportsPage />
           </RoleProtectedRoute>
         }
@@ -246,7 +278,7 @@ function AppRoutes() {
       <Route
         path="/audit-logs"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
+          <RoleProtectedRoute module="audit_logs">
             <AuditLogsPage />
           </RoleProtectedRoute>
         }
@@ -254,7 +286,7 @@ function AppRoutes() {
       <Route
         path="/data-quality"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
+          <RoleProtectedRoute module="data_governance" action="manage_access">
             <DataQualityPage />
           </RoleProtectedRoute>
         }
@@ -262,13 +294,21 @@ function AppRoutes() {
       <Route
         path="/system-health"
         element={
-          <RoleProtectedRoute allowedRoles={['super_admin', 'company_admin', 'admin']}>
+          <RoleProtectedRoute module="system_monitoring" action="manage_access">
             <SystemHealthPage />
           </RoleProtectedRoute>
         }
       />
-      <Route path="/admin" element={<Navigate to="/dashboard" replace />} />
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      <Route
+        path="/data-governance"
+        element={
+          <RoleProtectedRoute module="data_governance" action="manage_access">
+            <DataGovernancePage />
+          </RoleProtectedRoute>
+        }
+      />
+      <Route path="/admin" element={<PermissionLanding />} />
+      <Route path="*" element={<PermissionLanding />} />
     </Routes>
   );
 }
