@@ -1262,11 +1262,79 @@ def _load_pending_batch(db: DbDependency, user, batch_id: int) -> ImportBatch:
     return batch
 
 
-def _process_product_records(db: DbDependency, user, records: list[ImportRecord]) -> tuple[int, int]:
+def _process_product_records(
+    db: DbDependency,
+    user,
+    records: list[ImportRecord],
+    mapped_fields: set[str] | None = None,
+) -> tuple[int, int, int]:
     inserted = 0
+    updated = 0
     failed = 0
     for record in records:
-        resolved = json.loads(record.rowData).get("resolved", {})
+        row_data = json.loads(record.rowData)
+        resolved = row_data.get("resolved", {})
+        if resolved.get("_integrationUpdate"):
+            product = (
+                db.query(Product)
+                .filter(
+                    Product.companyId == user.companyId,
+                    func.upper(Product.sku) == str(resolved.get("sku") or "").upper(),
+                )
+                .first()
+            )
+            if product is None:
+                record.status = "failed"
+                record.message = "Product no longer exists for the configured SKU"
+                failed += 1
+                continue
+            fields = mapped_fields or set()
+            updates = {
+                "name": ("name", "name"),
+                "categoryid": ("categoryId", "categoryId"),
+                "categoryname": ("categoryId", "categoryId"),
+                "brand": ("brand", "brand"),
+                "description": ("description", "description"),
+                "unitprice": ("unitPrice", "unitPrice"),
+                "costprice": ("costPrice", "costPrice"),
+                "maxstocklevel": ("maxStockLevel", "maxStockLevel"),
+                "unitofmeasure": ("unitOfMeasure", "unitOfMeasure"),
+                "status": ("status", "status"),
+            }
+            for field, (attribute, resolved_key) in updates.items():
+                if field in fields and resolved.get(resolved_key) is not None:
+                    setattr(product, attribute, resolved[resolved_key])
+            now = datetime.now(timezone.utc)
+            if "stockquantity" in fields and resolved.get("stockQuantity") is not None:
+                previous = int(product.stockQuantity if product.stockQuantity is not None else product.initialStockQuantity or 0)
+                updated_quantity = int(resolved["stockQuantity"])
+                difference = updated_quantity - previous
+                product.stockQuantity = updated_quantity
+                if product.initialStockQuantity is None:
+                    product.initialStockQuantity = updated_quantity
+                if difference:
+                    db.add_all([
+                        StockAdjustment(
+                            companyId=user.companyId, productId=product.id,
+                            adjustmentType="manual_adjustment", quantity=abs(difference),
+                            reason="Integration update", remarks=f"CSV integration row {record.rowNumber}",
+                            adjustedBy=user.email, adjustedByUserId=user.id,
+                            adjustmentDate=now, createdAt=now,
+                        ),
+                        StockMovement(
+                            companyId=user.companyId, productId=product.id,
+                            productName=product.name or "", sku=product.sku or "",
+                            movementType="Integration Update", previousQuantity=previous,
+                            updatedQuantity=updated_quantity, quantityChanged=difference,
+                            reference=f"Integration row {record.rowNumber}",
+                            actor=user.email, actorUserId=user.id, createdAt=now,
+                        ),
+                    ])
+            product.updatedAt = now
+            record.status = "imported"
+            record.message = None
+            updated += 1
+            continue
         product = Product(
             companyId=user.companyId,
             categoryId=resolved.get("categoryId"),
@@ -1296,10 +1364,15 @@ def _process_product_records(db: DbDependency, user, records: list[ImportRecord]
             record.status = "failed"
             record.message = "SKU already exists"
             failed += 1
-    return inserted, failed
+    return inserted, updated, failed
 
 
-def _process_inventory_records(db: DbDependency, user, records: list[ImportRecord]) -> tuple[int, int]:
+def _process_inventory_records(
+    db: DbDependency,
+    user,
+    records: list[ImportRecord],
+    mapped_fields: set[str] | None = None,
+) -> tuple[int, int, int]:
     processed = 0
     failed = 0
     now = datetime.now(timezone.utc)
@@ -1332,11 +1405,17 @@ def _process_inventory_records(db: DbDependency, user, records: list[ImportRecor
             logging.exception("Inventory import row %s failed", record.rowNumber)
             record.message = "Inventory stock update failed due to a database error."
             failed += 1
-    return processed, failed
+    return (0, processed, failed) if mapped_fields is not None else (processed, 0, failed)
 
 
-def _process_customer_records(db: DbDependency, user, records: list[ImportRecord]) -> tuple[int, int]:
+def _process_customer_records(
+    db: DbDependency,
+    user,
+    records: list[ImportRecord],
+    mapped_fields: set[str] | None = None,
+) -> tuple[int, int, int]:
     inserted = 0
+    updated = 0
     failed = 0
     used_ids = {
         row[0]
@@ -1347,6 +1426,40 @@ def _process_customer_records(db: DbDependency, user, records: list[ImportRecord
     now = datetime.now(timezone.utc)
     for record in records:
         resolved = json.loads(record.rowData).get("resolved", {})
+        if resolved.get("_integrationUpdate"):
+            customer = (
+                db.query(Customer)
+                .filter(
+                    Customer.companyId == user.companyId,
+                    Customer.isDeleted != 1,
+                    func.lower(Customer.email) == str(resolved.get("email") or "").lower(),
+                )
+                .first()
+            )
+            if customer is None:
+                record.status = "failed"
+                record.message = "Customer no longer exists for the configured email"
+                failed += 1
+                continue
+            fields = mapped_fields or set()
+            updates = {
+                "name": "name", "phone": "phone", "dateofbirth": "dateOfBirth",
+                "gender": "gender", "address": "address", "city": "city", "state": "state",
+                "country": "country", "postalcode": "postalCode", "customertype": "customerType",
+                "preferredsaleschannel": "preferredSalesChannel", "status": "status",
+            }
+            resolved_keys = {
+                "dateofbirth": "dateOfBirth", "postalcode": "postalCode",
+                "customertype": "customerType", "preferredsaleschannel": "preferredSalesChannel",
+            }
+            for field, attribute in updates.items():
+                if field in fields:
+                    setattr(customer, attribute, resolved.get(resolved_keys.get(field, field)))
+            customer.updatedAt = datetime.now(timezone.utc)
+            record.status = "imported"
+            record.message = None
+            updated += 1
+            continue
         customer = Customer(
             companyId=user.companyId,
             name=resolved.get("name") or "Unknown Customer",
@@ -1382,7 +1495,7 @@ def _process_customer_records(db: DbDependency, user, records: list[ImportRecord
             record.status = "failed"
             record.message = "Customer could not be imported"
             failed += 1
-    return inserted, failed
+    return inserted, updated, failed
 
 
 def _resolve_import_customer(db: DbDependency, user, resolved: dict) -> tuple[str, int | None]:
@@ -1458,7 +1571,7 @@ def _allocate_amount(total: float, lines: list[dict]) -> list[float]:
     return allocated
 
 
-def _process_sales_records(db: DbDependency, user, company, records: list[ImportRecord]) -> tuple[int, int]:
+def _process_sales_records(db: DbDependency, user, company, records: list[ImportRecord]) -> tuple[int, int, int]:
     product_index = _build_product_index(db, user.companyId)
     products_by_id = {
         product.id: product
@@ -1599,7 +1712,7 @@ def _process_sales_records(db: DbDependency, user, company, records: list[Import
                 record.message = f"Could not import transaction: {detail}"
             failed += len(group_records)
 
-    return inserted, failed
+    return inserted, 0, failed
 
 
 def _record_chunks(entity_type: str, records: list[ImportRecord]):
@@ -1666,11 +1779,17 @@ def confirm_import(batch_id: int, db: DbDependency, user, company) -> ImportConf
         .all()
     )
     valid_records = [record for record in records if record.status == "valid"]
+    integration_mapped_fields = (
+        set(json.loads(batch.integrationMappedFields))
+        if batch.integrationMappedFields is not None
+        else None
+    )
 
     batch.status = "processing"
     batch.startedAt = datetime.now(timezone.utc)
     batch.processedCount = int(batch.invalidCount or 0) + int(batch.duplicateCount or 0)
     batch.insertedCount = 0
+    batch.updatedCount = 0
     batch.failedCount = 0
     db.commit()
     _record_import_event(
@@ -1687,6 +1806,7 @@ def confirm_import(batch_id: int, db: DbDependency, user, company) -> ImportConf
     )
 
     inserted = 0
+    updated = 0
     failed = 0
     for chunk in _record_chunks(batch.entityType, valid_records):
         db.refresh(batch)
@@ -1699,7 +1819,7 @@ def confirm_import(batch_id: int, db: DbDependency, user, company) -> ImportConf
             for record in remaining:
                 record.status = "cancelled"
                 record.message = "Import was cancelled before this record was processed."
-            if inserted:
+            if inserted or updated:
                 _reconcile_import_changes(db, user, batch.id)
             batch.processedCount = int(batch.totalRows or 0)
             _finish_import_batch(batch, "cancelled")
@@ -1709,16 +1829,24 @@ def confirm_import(batch_id: int, db: DbDependency, user, company) -> ImportConf
 
         try:
             if batch.entityType == "products":
-                chunk_inserted, chunk_failed = _process_product_records(db, user, chunk)
+                chunk_inserted, chunk_updated, chunk_failed = _process_product_records(
+                    db, user, chunk, integration_mapped_fields
+                )
             elif batch.entityType == "inventory":
-                chunk_inserted, chunk_failed = _process_inventory_records(db, user, chunk)
+                chunk_inserted, chunk_updated, chunk_failed = _process_inventory_records(
+                    db, user, chunk, integration_mapped_fields
+                )
             elif batch.entityType == "customers":
-                chunk_inserted, chunk_failed = _process_customer_records(db, user, chunk)
+                chunk_inserted, chunk_updated, chunk_failed = _process_customer_records(
+                    db, user, chunk, integration_mapped_fields
+                )
             else:
-                chunk_inserted, chunk_failed = _process_sales_records(db, user, company, chunk)
+                chunk_inserted, chunk_updated, chunk_failed = _process_sales_records(db, user, company, chunk)
             inserted += chunk_inserted
+            updated += chunk_updated
             failed += chunk_failed
             batch.insertedCount = inserted
+            batch.updatedCount = updated
             batch.failedCount = failed
             batch.processedCount = min(int(batch.totalRows or 0), int(batch.processedCount or 0) + len(chunk))
             db.commit()
@@ -1735,9 +1863,10 @@ def confirm_import(batch_id: int, db: DbDependency, user, company) -> ImportConf
             for record in remaining:
                 record.status = "failed"
                 record.message = failure_message
-            if inserted:
+            if inserted or updated:
                 _reconcile_import_changes(db, user, batch.id)
             batch.insertedCount = inserted
+            batch.updatedCount = updated
             batch.failedCount = failed + len(remaining)
             batch.processedCount = int(batch.totalRows or 0)
             batch.failureMessage = failure_message
@@ -1759,9 +1888,18 @@ def confirm_import(batch_id: int, db: DbDependency, user, company) -> ImportConf
     _reconcile_import_changes(db, user, batch.id)
 
     db.refresh(batch)
-    terminal_status = "completed_with_errors" if failed > 0 else "completed"
+    has_integration_rejections = bool(
+        batch.integrationDuplicateStrategy in {"insert", "reject"}
+        and int(batch.duplicateCount or 0) > 0
+    )
+    terminal_status = (
+        "completed_with_errors"
+        if failed > 0 or (batch.integrationDuplicateStrategy and (int(batch.invalidCount or 0) > 0 or has_integration_rejections))
+        else "completed"
+    )
     _finish_import_batch(batch, terminal_status)
     batch.insertedCount = inserted
+    batch.updatedCount = updated
     batch.failedCount = failed
     batch.processedCount = int(batch.totalRows or 0)
     if batch.entityType in ("products", "inventory", "sales"):

@@ -25,6 +25,7 @@ import ReportsPage from './pages/admin/ReportsPage.tsx';
 import DataQualityPage from './pages/admin/DataQualityPage.tsx';
 import SystemHealthPage from './pages/admin/SystemHealthPage.tsx';
 import DataGovernancePage from './pages/admin/DataGovernancePage.tsx';
+import IntegrationsPage from './pages/admin/IntegrationsPage.tsx';
 import { AuthProvider, useAuth } from './auth/AuthContext.tsx';
 import ErrorBoundary from './components/admin/ErrorBoundary.tsx';
 
@@ -57,6 +58,7 @@ const permissionLandingPaths: Array<{ module: string; path: string; action: stri
   { module: 'audit_logs', path: '/audit-logs', action: 'view' },
   { module: 'system_monitoring', path: '/system-health', action: 'manage_access' },
   { module: 'data_governance', path: '/data-governance', action: 'manage_access' },
+  { module: 'data_integrations', path: '/integrations', action: 'view' },
 ];
 
 function PermissionLanding() {
@@ -304,6 +306,14 @@ function AppRoutes() {
         element={
           <RoleProtectedRoute module="data_governance" action="manage_access">
             <DataGovernancePage />
+          </RoleProtectedRoute>
+        }
+      />
+      <Route
+        path="/integrations"
+        element={
+          <RoleProtectedRoute module="data_integrations">
+            <IntegrationsPage />
           </RoleProtectedRoute>
         }
       />

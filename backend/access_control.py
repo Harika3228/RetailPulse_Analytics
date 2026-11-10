@@ -27,6 +27,7 @@ ROLE_PERMISSION_MODULES = (
     "audit_logs",
     "system_monitoring",
     "data_governance",
+    "data_integrations",
 )
 ADMIN_ROLE_PERMISSIONS = {
     module: list(ROLE_PERMISSION_ACTIONS)
@@ -91,6 +92,7 @@ def permission_for_request(request: Request) -> tuple[str, str] | None:
         ("/companies", "data_governance", "manage_access"),
         ("/system-health", "system_monitoring", "manage_access"),
         ("/api/system-health", "system_monitoring", "manage_access"),
+        ("/integrations", "data_integrations", None),
         ("/data-quality", "data_governance", "manage_access"),
         ("/audit-logs", "audit_logs", None),
         ("/workflows", "workflows_approvals", None),
@@ -124,6 +126,8 @@ def permission_for_request(request: Request) -> tuple[str, str] | None:
     module, fixed_action = match
     if fixed_action:
         return module, fixed_action
+    if path == "/integrations/test-connection" or path.endswith("/test-connection"):
+        return module, "update"
     if path.startswith("/workflows/") and any(
         segment in path for segment in ("/decision", "/approve", "/reject")
     ):

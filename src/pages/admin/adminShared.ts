@@ -20,7 +20,7 @@ export {
   isNotFoundError,
 };
 
-export const sidebarItems = ['Dashboard', 'Inventory', 'Inventory Forecast', 'Categories', 'Products', 'Customers', 'Data Imports', 'Sales', 'Sales Analytics', 'Forecasting', 'Reports', 'Data Quality', 'Workflows & Approvals', 'System Health', 'Data Governance', 'Notifications', 'Audit Logs', 'Settings'];
+export const sidebarItems = ['Dashboard', 'Inventory', 'Inventory Forecast', 'Categories', 'Products', 'Customers', 'Data Imports', 'Sales', 'Sales Analytics', 'Forecasting', 'Reports', 'Data Quality', 'Workflows & Approvals', 'System Health', 'Data Governance', 'Integrations', 'Notifications', 'Audit Logs', 'Settings'];
 export const sidebarPermissions: Record<string, [string, string]> = {
   Dashboard: ['dashboard_analytics', 'view'],
   Inventory: ['inventory', 'view'],
@@ -37,6 +37,7 @@ export const sidebarPermissions: Record<string, [string, string]> = {
   'Workflows & Approvals': ['workflows_approvals', 'view'],
   'System Health': ['system_monitoring', 'manage_access'],
   'Data Governance': ['data_governance', 'manage_access'],
+  Integrations: ['data_integrations', 'view'],
   Notifications: ['dashboard_analytics', 'view'],
   'Audit Logs': ['audit_logs', 'view'],
   Settings: ['dashboard_analytics', 'view'],
@@ -59,6 +60,7 @@ export const sidebarRouteMap = {
   'Workflows & Approvals': '/workflows',
   'System Health': '/system-health',
   'Data Governance': '/data-governance',
+  Integrations: '/integrations',
   Settings: '/dashboard',
   'Audit Logs': '/audit-logs',
 };

@@ -25,6 +25,9 @@ function getSectionFromPath(pathname) {
   if (pathname === '/data-governance') {
     return 'Data Governance';
   }
+  if (pathname === '/integrations') {
+    return 'Integrations';
+  }
   if (pathname === '/inventory/forecast') {
     return 'Inventory Forecast';
   }

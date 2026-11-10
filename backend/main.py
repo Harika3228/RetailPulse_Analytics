@@ -1,4 +1,5 @@
 ﻿# RetailPulse Analytics - backend entry point
+import asyncio
 import os
 import sys
 import logging
@@ -37,12 +38,30 @@ from backend.routers.forecasting_routes import router as forecasting_router
 from backend.routers.analytics_routes import router as analytics_router
 from backend.routers.workflows_routes import router as workflows_router
 from backend.routers.system_health_routes import router as system_health_router
+from backend.routers.integrations_routes import router as integrations_router
 from backend.routers.governance_routes import router as governance_router
+from backend.integration_scheduler import integration_schedule_loop
 
 ensure_schema()
 seed_demo_data()
 app = FastAPI(title="RetailPulse Analytics API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+
+@app.on_event("startup")
+async def start_integration_scheduler():
+    app.state.integration_scheduler_task = asyncio.create_task(integration_schedule_loop())
+
+
+@app.on_event("shutdown")
+async def stop_integration_scheduler():
+    task = getattr(app.state, "integration_scheduler_task", None)
+    if task:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 @app.middleware("http")
@@ -192,4 +211,5 @@ app.include_router(forecasting_router)
 app.include_router(analytics_router)
 app.include_router(workflows_router)
 app.include_router(system_health_router)
+app.include_router(integrations_router)
 app.include_router(governance_router)

@@ -315,6 +315,122 @@ def ensure_schema() -> None:
             connection.execute(text("ALTER TABLE sale_items ADD COLUMN remainingStockSnapshot INTEGER"))
 
         # data import / integration management
+        integration_tables = set(inspect(connection).get_table_names())
+        if "integration_connectors" in integration_tables:
+            connector_columns = {
+                column["name"]
+                for column in inspect(connection).get_columns("integration_connectors")
+            }
+            connector_migrations = (
+                ("dataSourceType", "VARCHAR"),
+                ("connectionConfiguration", "TEXT"),
+                ("encryptedCredentials", "TEXT"),
+                ("credentialsConfigured", "BOOLEAN DEFAULT 0"),
+                ("authenticationMethod", "VARCHAR DEFAULT 'none'"),
+                ("targetModule", "VARCHAR"),
+                ("syncFrequency", "VARCHAR DEFAULT 'manual'"),
+                ("scheduleEnabled", "BOOLEAN DEFAULT 0"),
+                ("scheduleTime", "VARCHAR DEFAULT '00:00'"),
+                ("scheduleDay", "INTEGER"),
+                ("duplicateStrategy", "VARCHAR DEFAULT 'skip'"),
+                ("encryptedSourceData", "TEXT"),
+                ("sourceFileName", "VARCHAR"),
+                ("nextSyncAt", "DATETIME"),
+                ("createdByUserId", "INTEGER"),
+                ("updatedAt", "DATETIME"),
+            )
+            for column_name, column_definition in connector_migrations:
+                if column_name not in connector_columns:
+                    connection.execute(text(
+                        f"ALTER TABLE integration_connectors ADD COLUMN {column_name} {column_definition}"
+                    ))
+            connector_columns.update(column_name for column_name, _ in connector_migrations)
+            if "provider" in connector_columns:
+                connection.execute(text("""
+                    UPDATE integration_connectors
+                    SET dataSourceType = CASE lower(provider)
+                        WHEN 'postgres' THEN 'postgresql'
+                        WHEN 'postgresql' THEN 'postgresql'
+                        WHEN 'csv' THEN 'csv'
+                        WHEN 'rest' THEN 'rest_api'
+                        WHEN 'rest_api' THEN 'rest_api'
+                        ELSE 'unknown'
+                    END
+                    WHERE dataSourceType IS NULL OR trim(dataSourceType) = ''
+                """))
+            else:
+                connection.execute(text("""
+                    UPDATE integration_connectors
+                    SET dataSourceType = 'unknown'
+                    WHERE dataSourceType IS NULL OR trim(dataSourceType) = ''
+                """))
+            connection.execute(text("""
+                UPDATE integration_connectors
+                SET connectionConfiguration = '{}'
+                WHERE connectionConfiguration IS NULL OR trim(connectionConfiguration) = ''
+            """))
+            connection.execute(text("""
+                UPDATE integration_connectors
+                SET authenticationMethod = 'none'
+                WHERE authenticationMethod IS NULL OR trim(authenticationMethod) = ''
+            """))
+            connection.execute(text("""
+                UPDATE integration_connectors
+                SET credentialsConfigured = CASE
+                    WHEN encryptedCredentials IS NOT NULL AND trim(encryptedCredentials) != '' THEN 1
+                    ELSE 0
+                END
+            """))
+            connection.execute(text("""
+                UPDATE integration_connectors
+                SET syncFrequency = 'manual'
+                WHERE syncFrequency IS NULL OR trim(syncFrequency) = ''
+            """))
+            connection.execute(text("""
+                UPDATE integration_connectors
+                SET scheduleEnabled = 1
+                WHERE scheduleEnabled = 0
+                  AND lower(coalesce(syncFrequency, 'manual')) IN ('hourly', 'daily', 'weekly')
+                  AND lower(coalesce(status, 'inactive')) = 'active'
+                  AND encryptedSourceData IS NOT NULL
+            """))
+            connection.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_integration_connector_company_name
+                ON integration_connectors(companyId, name)
+            """))
+        if "integration_sync_runs" in integration_tables:
+            sync_columns = {
+                column["name"]
+                for column in inspect(connection).get_columns("integration_sync_runs")
+            }
+            sync_migrations = (
+                ("importBatchId", "INTEGER"),
+                ("triggeredByUserId", "INTEGER"),
+                ("sourceHash", "VARCHAR"),
+                ("syncMode", "VARCHAR DEFAULT 'initial'"),
+                ("triggerType", "VARCHAR DEFAULT 'manual'"),
+                ("recordsProcessed", "INTEGER DEFAULT 0"),
+                ("recordsInserted", "INTEGER DEFAULT 0"),
+                ("recordsUpdated", "INTEGER DEFAULT 0"),
+                ("recordsSkipped", "INTEGER DEFAULT 0"),
+            )
+            for column_name, column_definition in sync_migrations:
+                if column_name not in sync_columns:
+                    connection.execute(text(
+                        f"ALTER TABLE integration_sync_runs ADD COLUMN {column_name} {column_definition}"
+                    ))
+            connection.execute(text("DROP INDEX IF EXISTS uq_integration_sync_connector_source"))
+        if "import_batches" in integration_tables:
+            import_columns = {
+                column["name"]
+                for column in inspect(connection).get_columns("import_batches")
+            }
+            for column_name in ("integrationDuplicateStrategy", "integrationMappedFields"):
+                if column_name not in import_columns:
+                    connection.execute(text(
+                        f"ALTER TABLE import_batches ADD COLUMN {column_name} VARCHAR"
+                    ))
+
         connection.execute(text("""
             CREATE TABLE IF NOT EXISTS import_batches (
                 id INTEGER PRIMARY KEY,

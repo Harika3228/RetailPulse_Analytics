@@ -129,4 +129,11 @@ export const queryKeys = {
     list: (params: string) => ['workflows', 'list', params] as const,
     detail: (id: number | string) => ['workflows', 'detail', String(id)] as const,
   },
+  integrations: {
+    dashboard: ['integrations', 'dashboard'] as const,
+    detail: (id: number | string) => ['integrations', 'detail', String(id)] as const,
+    syncHistory: ['integrations', 'sync-history'] as const,
+    syncHistoryPage: (offset: number, limit: number) => ['integrations', 'sync-history', offset, limit] as const,
+    syncDetail: (id: number | string) => ['integrations', 'sync-detail', String(id)] as const,
+  },
 } as const;

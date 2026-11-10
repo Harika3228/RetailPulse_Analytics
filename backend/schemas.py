@@ -420,6 +420,166 @@ class SystemHealthThresholdUpdate(BaseModel):
     repeatedFailureCount: int = Field(ge=1, le=1000)
 
 
+class IntegrationDashboardItem(BaseModel):
+    id: int
+    name: str
+    dataSourceType: Literal["postgresql", "csv", "rest_api", "unknown"]
+    status: Literal["active", "inactive", "failed"]
+    isOperational: bool
+    targetModule: str
+    syncFrequency: str
+    scheduleEnabled: bool = False
+    scheduleTime: str = "00:00"
+    scheduleDay: int | None = None
+    nextSyncAt: datetime | None = None
+    lastSyncAt: datetime | None
+    lastSyncStatus: str | None = None
+    pendingJobs: int
+    recordsSynced: int
+    recordsFailed: int
+
+
+class IntegrationConnectorCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    dataSourceType: Literal["postgresql", "csv", "rest_api"]
+    connectionConfiguration: dict[str, Any] = Field(default_factory=dict)
+    authenticationMethod: Literal["none", "password", "bearer_token", "api_key", "basic"] = "none"
+    credentials: dict[str, str] = Field(default_factory=dict)
+    targetModule: Literal["products", "inventory", "sales", "customers"]
+    syncFrequency: Literal["manual", "hourly", "daily", "weekly"] = "manual"
+    scheduleEnabled: bool = False
+    scheduleTime: str = Field(default="00:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    scheduleDay: int | None = Field(default=None, ge=0, le=6)
+    duplicateStrategy: Literal["insert", "update", "skip", "reject"] = "skip"
+    status: Literal["active", "inactive"] = "inactive"
+
+
+class IntegrationConnectorUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    connectionConfiguration: dict[str, Any] | None = None
+    authenticationMethod: Literal["none", "password", "bearer_token", "api_key", "basic"] | None = None
+    credentials: dict[str, str] | None = None
+    clearCredentials: bool = False
+    targetModule: Literal["products", "inventory", "sales", "customers"] | None = None
+    syncFrequency: Literal["manual", "hourly", "daily", "weekly"] | None = None
+    scheduleEnabled: bool | None = None
+    scheduleTime: str | None = Field(default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    scheduleDay: int | None = Field(default=None, ge=0, le=6)
+    duplicateStrategy: Literal["insert", "update", "skip", "reject"] | None = None
+    status: Literal["active", "inactive"] | None = None
+
+
+class IntegrationFieldMappingUpdate(BaseModel):
+    fieldMappings: dict[str, str] = Field(min_length=1, max_length=32)
+
+
+class IntegrationFieldMappingResponse(BaseModel):
+    connectorId: int
+    targetModule: str
+    fieldMappings: dict[str, str]
+    updatedAt: datetime | None
+
+
+class IntegrationScheduleUpdate(BaseModel):
+    syncFrequency: Literal["manual", "hourly", "daily", "weekly"]
+    scheduleEnabled: bool
+    scheduleTime: str = Field(default="00:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    scheduleDay: int | None = Field(default=None, ge=0, le=6)
+
+
+class IntegrationConnectorResponse(BaseModel):
+    id: int
+    name: str
+    dataSourceType: Literal["postgresql", "csv", "rest_api", "unknown"]
+    connectionConfiguration: dict[str, Any]
+    authenticationMethod: str
+    hasCredentials: bool
+    targetModule: str
+    syncFrequency: str
+    scheduleEnabled: bool = False
+    scheduleTime: str = "00:00"
+    scheduleDay: int | None = None
+    duplicateStrategy: Literal["insert", "update", "skip", "reject"]
+    hasSourceFile: bool
+    nextSyncAt: datetime | None
+    status: Literal["active", "inactive", "failed"]
+    isOperational: bool
+    createdBy: str
+    createdAt: datetime | None
+    updatedAt: datetime | None
+
+
+class IntegrationSyncResponse(BaseModel):
+    syncRunId: int
+    importBatchId: int
+    status: str
+    totalRows: int
+    validRows: int
+    invalidRows: int
+    duplicateRows: int
+    syncMode: Literal["initial", "incremental"]
+    triggerType: Literal["manual", "scheduled"]
+    insertedRows: int = 0
+    updatedRows: int = 0
+    skippedRows: int = 0
+    failedRows: int = 0
+
+
+class IntegrationSyncRunItem(BaseModel):
+    id: int
+    integrationId: int
+    integrationName: str
+    triggeredBy: str
+    triggerType: Literal["manual", "scheduled"]
+    syncMode: Literal["initial", "incremental"]
+    importBatchId: int | None
+    startedAt: datetime | None
+    completedAt: datetime | None
+    durationSeconds: float | None
+    recordsProcessed: int
+    recordsInserted: int
+    recordsUpdated: int
+    recordsSkipped: int
+    recordsFailed: int
+    status: Literal["pending", "running", "completed", "completed_with_errors", "failed", "cancelled"]
+    failureReason: str | None
+    importSummary: dict[str, Any] | None = None
+
+
+class IntegrationSyncHistoryResponse(BaseModel):
+    total: int
+    items: list[IntegrationSyncRunItem]
+
+
+class IntegrationConnectionTestRequest(BaseModel):
+    connectorId: int | None = None
+    dataSourceType: Literal["postgresql", "csv", "rest_api"]
+    connectionConfiguration: dict[str, Any] = Field(default_factory=dict)
+    authenticationMethod: Literal["none", "password", "bearer_token", "api_key", "basic"] = "none"
+    credentials: dict[str, str] | None = None
+    targetModule: Literal["products", "inventory", "sales", "customers"]
+    syncFrequency: Literal["manual", "hourly", "daily", "weekly"] = "manual"
+
+
+class IntegrationConnectionTestResponse(BaseModel):
+    success: bool
+    message: str
+    details: list[str] = Field(default_factory=list)
+    testedAt: datetime
+
+
+class IntegrationDashboardResponse(BaseModel):
+    totalIntegrations: int
+    activeIntegrations: int
+    inactiveIntegrations: int
+    failedIntegrations: int
+    lastSyncAt: datetime | None
+    pendingSyncJobs: int
+    recordsSynced: int
+    recordsFailed: int
+    integrations: list[IntegrationDashboardItem]
+
+
 class ApprovalRequestResponse(BaseModel):
     id: int
     requestType: str

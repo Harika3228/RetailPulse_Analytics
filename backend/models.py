@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, UniqueConstraint, inspect, text
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, UniqueConstraint, inspect, text
 
 from backend.database import Base, engine
+from sqlalchemy.orm import deferred
 
 
 class Company(Base):
@@ -261,6 +262,8 @@ class ImportBatch(Base):
     startedAt = Column(DateTime)
     completedAt = Column(DateTime)
     durationSeconds = Column(Float)
+    integrationDuplicateStrategy = Column(String)
+    integrationMappedFields = Column(String)
 
 
 class ImportRecord(Base):
@@ -444,6 +447,57 @@ class SystemIncidentEvent(Base):
     actorUserId = Column(Integer, index=True)
     actorName = Column(String)
     createdAt = Column(DateTime, default=datetime.now(timezone.utc), index=True)
+
+
+class IntegrationConnector(Base):
+    __tablename__ = "integration_connectors"
+    __table_args__ = (
+        UniqueConstraint("companyId", "name", name="uq_integration_connector_company_name"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    name = Column(String, index=True)
+    dataSourceType = Column(String, index=True)
+    connectionConfiguration = Column(String)
+    encryptedCredentials = deferred(Column(String))
+    credentialsConfigured = Column(Boolean, default=False)
+    authenticationMethod = Column(String, default="none")
+    targetModule = Column(String, index=True)
+    syncFrequency = Column(String, default="manual")
+    scheduleEnabled = Column(Boolean, default=False)
+    scheduleTime = Column(String, default="00:00")
+    scheduleDay = Column(Integer)
+    duplicateStrategy = Column(String, default="skip")
+    encryptedSourceData = Column(String)
+    sourceFileName = Column(String)
+    nextSyncAt = Column(DateTime, index=True)
+    status = Column(String, default="inactive", index=True)
+    createdByUserId = Column(Integer, index=True)
+    createdAt = Column(DateTime, default=datetime.now(timezone.utc), index=True)
+    updatedAt = Column(DateTime, default=datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class IntegrationSyncRun(Base):
+    __tablename__ = "integration_sync_runs"
+    __table_args__ = ()
+    id = Column(Integer, primary_key=True, index=True)
+    companyId = Column(Integer, index=True)
+    connectorId = Column(Integer, index=True)
+    importBatchId = Column(Integer, index=True)
+    triggeredByUserId = Column(Integer, index=True)
+    sourceHash = Column(String)
+    syncMode = Column(String, default="initial")
+    triggerType = Column(String, default="manual", index=True)
+    status = Column(String, default="pending", index=True)
+    startedAt = Column(DateTime, index=True)
+    completedAt = Column(DateTime, index=True)
+    recordsSynced = Column(Integer, default=0)
+    recordsProcessed = Column(Integer, default=0)
+    recordsInserted = Column(Integer, default=0)
+    recordsUpdated = Column(Integer, default=0)
+    recordsSkipped = Column(Integer, default=0)
+    recordsFailed = Column(Integer, default=0)
+    failureReason = Column(String)
 
 
 class SystemHealthThreshold(Base):
